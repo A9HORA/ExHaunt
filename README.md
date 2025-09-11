@@ -5,7 +5,7 @@
 ExHaunt an analyst's tool helps you discover **dangling subdomains** (CNAMEs pointing to unclaimed services or dead domains) and sorts them into clear buckets:
 `OK`, `VULNERABLE`, `BROKEN`, `RETRY`, `ENV_ERROR`. Each result comes with evidence and confidence.
 
-> Built & maintained by **[a9hora](https://github.com/a9hora)**
+> Built & maintained by **[A9HORA](https://twitter.com/A9HORA)**
 
 ---
 
