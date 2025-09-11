@@ -1,0 +1,8 @@
+dnspython>=2.6.1
+tldextract>=3.6.0
+python-whois>=0.9.3
+ipwhois>=1.2.0
+cryptography>=42.0.0
+tqdm>=4.66.0
+colorama>=0.4.6
+requests>=2.31.0
