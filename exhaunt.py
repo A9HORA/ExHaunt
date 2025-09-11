@@ -30,6 +30,40 @@ def process_one(hostname: str, om: OwnershipMiddleware) -> dict:
     except Exception as e:
         return {"hostname": hostname, "error": str(e)}
 
+def _first(lst):
+    return lst[0] if isinstance(lst, list) and lst else None
+
+def _join(lst):
+    return ";".join(lst) if isinstance(lst, list) else (lst or "")
+
+def _flatten_row(r: dict) -> dict:
+    """Flatten ExHaunt nested result to your legacy CSV schema."""
+    dp = r.get("dns_provider") or {}
+    cls = dp.get("classification") or {}
+    dom = r.get("domain_owner") or {}
+    sp = r.get("service_provider") or {}
+    chain = sp.get("cname_chain") or []
+    ipw = sp.get("ip_whois") or {}
+
+    return {
+        "subdomain": r.get("hostname", ""),
+        "cname": _first(chain) or "",
+        "hostname_ips": _join(r.get("hostname_ips") or []),
+        "status": cls.get("reason", ""),
+        "takeover_risk": cls.get("risk", ""),
+        "owner_registrar": dom.get("whois_registrar") or "",
+        "owner_org": dom.get("whois_owner") or "",
+        "dns_provider": _join(dp.get("ns") or []),
+        "dns_error": dp.get("dns_error") or "",
+        "service_cname": (chain[-1] if chain else ""),
+        "service_cname_chain": _join(chain),  # NEW: full chain
+        "service_ips": _join(sp.get("ips") or []),
+        "service_country": ipw.get("asn_country_code") or "",
+        "service_network": ipw.get("network_name") or "",
+        "service_asn": ipw.get("asn") or "",
+        "service_asn_desc": ipw.get("asn_description") or "",
+    }
+
 def main():
     parser = argparse.ArgumentParser(
         description="ExHaunt 👻 by a9hora — Subdomain Takeover & Ownership Analyzer",
@@ -130,14 +164,17 @@ def main():
                     reason = cls.get("reason", "") if cls.get("risk") == "VULNERABLE" else "Suspicious provider suffix (haunted)"
                     print(Fore.RED + f"[VULNERABLE] {host} :: {reason}" + Style.RESET_ALL)
 
-    # outputs
+    # JSON stays full-fidelity (nested)
     write_json(results, f"{output_prefix}.json")
 
-    # build CSV headers from union of keys
-    fieldnames = sorted({k for row in results for k in (row.keys() if isinstance(row, dict) else [])})
-    if not fieldnames:
-        fieldnames = ["hostname","base_domain","dns_provider","domain_owner","service_provider","error"]
-    write_csv(results, f"{output_prefix}.csv", fieldnames)
+    # CSV: flatten to your legacy schema/columns (+ full chain)
+    flat_rows = [_flatten_row(r) for r in results]
+    fieldnames = [
+        "subdomain","cname","hostname_ips","status","takeover_risk","owner_registrar","owner_org",
+        "dns_provider","dns_error","service_cname","service_cname_chain",
+        "service_ips","service_country","service_network","service_asn","service_asn_desc"
+    ]
+    write_csv(flat_rows, f"{output_prefix}.csv", fieldnames)
 
     # final summary
     for r in results:

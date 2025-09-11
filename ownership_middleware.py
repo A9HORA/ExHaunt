@@ -165,7 +165,7 @@ def _resolve_ips(name: str) -> List[str]:
     return ips
 
 # =============================
-# RDAP helpers
+# RDAP helpers (+ 4h cache)
 # =============================
 _RDAP_BOOTSTRAP_URL = os.environ.get("RDAP_BOOTSTRAP_URL", "https://data.iana.org/rdap/dns.json")
 _RDAP_HTTP_TIMEOUT = float(os.environ.get("RDAP_TIMEOUT", "5.0"))
@@ -192,14 +192,40 @@ def _rdap_base_urls_for_suffix(suffix: str) -> list:
             return urls
     return []
 
+# --- NEW: RDAP per-domain cache (4 hours by default) ---
+_RDAP_CACHE: dict = {}
+_RDAP_TTL_SEC: int = int(os.environ.get("RDAP_TTL_SEC", str(4 * 60 * 60)))  # 4 hours default
+
+def _rdap_cache_get(key: str):
+    rec = _RDAP_CACHE.get(key)
+    if not rec:
+        return None
+    if (time.time() - rec["ts"]) > _RDAP_TTL_SEC:
+        _RDAP_CACHE.pop(key, None)
+        return None
+    return rec["data"]
+
+def _rdap_cache_put(key: str, data: dict):
+    _RDAP_CACHE[key] = {"ts": time.time(), "data": data}
+
 def _rdap_query_domain(domain: str, mode: str = "fast") -> dict:
+    # cache key includes mode (fast vs polite can differ in behavior/errors)
+    cache_key = f"{domain.lower()}|{mode}"
+    cached = _rdap_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     ext = tldextract.extract(domain)
     suffix = ext.suffix
     if not suffix:
-        return {"error": "no suffix"}
+        data = {"error": "no suffix"}
+        _rdap_cache_put(cache_key, data)
+        return data
     urls = _rdap_base_urls_for_suffix(suffix)
     if not urls:
-        return {"error": f"no rdap urls for suffix {suffix}"}
+        data = {"error": f"no rdap urls for suffix {suffix}"}
+        _rdap_cache_put(cache_key, data)
+        return data
 
     for base in urls:
         base = base.rstrip("/")
@@ -211,25 +237,36 @@ def _rdap_query_domain(domain: str, mode: str = "fast") -> dict:
                 with _NET_SEM:
                     resp = requests.get(url, timeout=_RDAP_HTTP_TIMEOUT, headers={"Accept": "application/rdap+json, application/json"})
                 if resp.status_code == 404:
-                    return {"found": False, "status_code": 404, "server": base}
+                    data = {"found": False, "status_code": 404, "server": base}
+                    _rdap_cache_put(cache_key, data)
+                    return data
                 if resp.ok:
-                    data = resp.json()
-                    statuses = data.get("status") or []
-                    return {"found": True, "ldhName": data.get("ldhName"), "handle": data.get("handle"), "status": statuses, "server": base}
+                    js = resp.json()
+                    statuses = js.get("status") or []
+                    data = {"found": True, "ldhName": js.get("ldhName"), "handle": js.get("handle"), "status": statuses, "server": base}
+                    _rdap_cache_put(cache_key, data)
+                    return data
                 if resp.status_code in (429, 502, 503, 504) and mode == "polite":
                     ra = resp.headers.get("Retry-After")
                     delay = float(ra) if (ra and ra.isdigit()) else backoff
                     time.sleep(delay)
                     backoff = min(backoff * 2.0, 8.0)
                     continue
-                return {"found": None, "status_code": resp.status_code, "server": base}
+                data = {"found": None, "status_code": resp.status_code, "server": base}
+                _rdap_cache_put(cache_key, data)
+                return data
             except requests.RequestException as e:
                 if mode == "polite":
                     time.sleep(backoff)
                     backoff = min(backoff * 2.0, 8.0)
                     continue
-                return {"error": str(e)}
-    return {"error": "rdap query failed"}
+                data = {"error": str(e)}
+                _rdap_cache_put(cache_key, data)
+                return data
+
+    data = {"error": "rdap query failed"}
+    _rdap_cache_put(cache_key, data)
+    return data
 
 # =============================
 # Ownership Middleware
@@ -295,7 +332,7 @@ class OwnershipMiddleware:
             return result
 
     def get_domain_owner(self, base_domain: str) -> Dict:
-        out = {"whois_owner": None, "whois_error": None, "tls_cert": None}
+        out = {"whois_owner": None, "whois_registrar": None, "whois_error": None, "tls_cert": None}
         if whois is not None:
             try:
                 with self._whois_lock:
@@ -306,9 +343,13 @@ class OwnershipMiddleware:
                 with _NET_SEM:
                     w = whois.whois(base_domain)
                 owner = w.get("org") or w.get("registrant_org") or w.get("registrant_name") or w.get("name")
+                registrar = w.get("registrar")
                 if isinstance(owner, list):
                     owner = owner[0] if owner else None
+                if isinstance(registrar, list):
+                    registrar = registrar[0] if registrar else None
                 out["whois_owner"] = owner
+                out["whois_registrar"] = registrar
             except Exception as e:
                 out["whois_error"] = str(e)
         else:
@@ -332,6 +373,7 @@ class OwnershipMiddleware:
                 svc["ip_whois"] = {
                     "asn": info.get("asn"),
                     "asn_description": info.get("asn_description"),
+                    "asn_country_code": info.get("asn_country_code"),
                     "network_name": (info.get("network") or {}).get("name"),
                 }
         # RDAP check for terminal registrable domain
@@ -351,9 +393,11 @@ class OwnershipMiddleware:
         loose_vuln = False
         if self.mode == "loose" and service_provider.get("loose_match_provider"):
             loose_vuln = True
+        hostname_ips = _resolve_ips(hostname)
         return {
             "hostname": hostname,
             "base_domain": base_domain,
+            "hostname_ips": hostname_ips,
             "dns_provider": dns_provider,
             "domain_owner": domain_owner,
             "service_provider": service_provider,
