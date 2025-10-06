@@ -1,0 +1,37 @@
+# ExHaunt HTTP/TLS fingerprints for default/unbound backends
+# Confidence levels: strong | medium | weak
+
+- name: aws-alb-default
+  provider: AWS
+  status: [ "404", "503" ]
+  header:
+    - "server: ^awselb/2\\.0$"
+  confidence: strong
+
+- name: gcp-https-lb-default
+  provider: GCP
+  status: [ "404", "502" ]
+  header:
+    - "server: ^google frontend$|^gfe|^x-envoy"
+  confidence: strong
+
+- name: azure-frontdoor-default
+  provider: Azure
+  status: [ "400", "404" ]
+  header:
+    - "x-azure-ref: .+"
+  confidence: medium
+
+- name: fastly-unknown-domain
+  provider: Fastly
+  status: [ "404", "503" ]
+  body:
+    - "Fastly error: unknown domain"
+  confidence: strong
+
+- name: cloudflare-origin-dns-error
+  provider: Cloudflare
+  status: [ "530", "502" ]
+  body:
+    - "Error\\s*1016"
+  confidence: medium

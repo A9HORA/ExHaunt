@@ -1,0 +1,41 @@
+asns:
+  - 15169     # Google
+  - 396982    # Google Cloud (US)
+  - 16509     # Amazon
+  - 14618     # Amazon-02
+  - 8075      # Microsoft
+  - 13335     # Cloudflare
+  - 54113     # Fastly
+  - 16625     # Akamai
+  - 63949     # Akamai/Linode
+  - 14061     # DigitalOcean
+  - 20473     # Vultr
+  - 24940     # Hetzner
+  - 16276     # OVH
+  - 31898     # Oracle
+  - 45102     # Alibaba
+  - 132203    # Tencent
+  - 8928      # Leaseweb
+  - 19551     # Packet/Equinix
+  - 8256      # Scaleway
+
+patterns:
+  - "google|google[-\\s]?cloud|gcp|google cloud platform"
+  - "amazon|aws|amazon[-\\s]?technologies|amazon[-\\s]?aes"
+  - "microsoft|azure"
+  - "cloudflare"
+  - "fastly"
+  - "akamai|linode"
+  - "digitalocean"
+  - "vultr"
+  - "hetzner"
+  - "ovh|ovhcloud"
+  - "oracle"
+  - "alibaba|aliyun"
+  - "tencent"
+  - "leaseweb"
+  - "equinix|packet"
+  - "scaleway"
+  - "upcloud"
+  - "render"
+  - "fly\\.io|flyio"
