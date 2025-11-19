@@ -1,21 +1,17 @@
 import csv
 import json
-from pathlib import Path
 
-def write_csv(data: list, filename: str, fieldnames: list):
-    """
-    Writes data (list of dicts) to a CSV file.
-    """
-    path = Path(filename)
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(data)
+def write_json(data, path: str):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-def write_json(data: list, filename: str):
+def write_csv(rows: list[dict], path: str, fieldnames: list[str]):
     """
-    Writes data (list of dicts) to a JSON file.
+    Write CSV with stable field order. Missing keys become empty strings.
     """
-    path = Path(filename)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            row = {k: ("" if r.get(k) is None else r.get(k)) for k in fieldnames}
+            w.writerow(row)

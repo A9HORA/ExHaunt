@@ -69,44 +69,51 @@ def classify(risk: Risk, reason: str, evidence: Optional[dict] = None, confidenc
 _NET_SEM = threading.BoundedSemaphore(value=int(os.environ.get("NET_CONCURRENCY", "128")))
 
 # =============================
-# DNS resolver helpers
+# DNS resolver helpers (system-first, public fallback)
 # =============================
-_PUBLIC_RESOLVER_POOLS: List[List[str]] = [
-    ["8.8.8.8", "8.8.4.4"],
-    ["1.1.1.1", "1.0.0.1"],
-    ["9.9.9.9", "149.112.112.112"],
-]
-
-def _make_resolver(timeout: float = 3.0, lifetime: float = 5.0) -> dns.resolver.Resolver:
-    r = dns.resolver.Resolver(configure=False)  # bypass /etc/resolv.conf
-    pool = _PUBLIC_RESOLVER_POOLS[os.getpid() % len(_PUBLIC_RESOLVER_POOLS)]
-    r.nameservers = pool
+def _make_resolver(timeout: float = 3.0, lifetime: float = 5.0, nameservers: Optional[List[str]] = None) -> dns.resolver.Resolver:
+    """
+    Build a resolver. If nameservers is None -> use system resolver; otherwise set explicit servers.
+    Timeouts/lifetime can be overridden by env: DNS_TIMEOUT / DNS_LIFETIME
+    """
+    r = dns.resolver.Resolver(configure=(nameservers is None))
+    if nameservers:
+        r.nameservers = nameservers
     r.timeout = float(os.environ.get("DNS_TIMEOUT", timeout))
     r.lifetime = float(os.environ.get("DNS_LIFETIME", lifetime))
     return r
 
-def _resolve_with_retries(name: str, rtype: str, attempts: int = 3, raise_on_no_answer: bool = False):
+_RESOLVER_POOLS: List[List[str]] = [
+    ["8.8.8.8", "8.8.4.4"],           # Google
+    ["1.1.1.1", "1.0.0.1"],           # Cloudflare
+    ["9.9.9.9", "149.112.112.112"],   # Quad9
+]
+
+def _resolve_with_multi_fallback(name: str, rtype: str, attempts: int = 2, raise_on_no_answer: bool = False):
+    """
+    Resolution strategy:
+      1) Try system resolver once.
+      2) Fall back across public resolver pools, light retries per pool.
+    """
     last_exc = None
-    for i in range(attempts):
-        try:
-            with _NET_SEM:
-                res = _make_resolver().resolve(name, rtype, raise_on_no_answer=raise_on_no_answer)
-            return res
-        except dns.exception.Timeout as e:
-            last_exc = e
-            if i == attempts - 1:
-                raise
-            continue
-        except dns.resolver.NoNameservers as e:
-            last_exc = e
-            if i == attempts - 1:
-                raise
-        except Exception as e:
-            last_exc = e
-            if i == attempts - 1:
-                raise
+    # System resolver first
+    try:
+        with _NET_SEM:
+            return _make_resolver().resolve(name, rtype, raise_on_no_answer=raise_on_no_answer)
+    except Exception as e:
+        last_exc = e
+    # Public pools
+    for pool in _RESOLVER_POOLS:
+        for _ in range(max(1, int(attempts))):
+            try:
+                with _NET_SEM:
+                    return _make_resolver(nameservers=pool).resolve(name, rtype, raise_on_no_answer=raise_on_no_answer)
+            except Exception as e:
+                last_exc = e
+                continue
     if last_exc:
         raise last_exc
+    raise dns.exception.DNSException("Resolution failed without specific exception")
 
 def _registrable_domain(host: str) -> str:
     ext = tldextract.extract(host or "")
@@ -160,7 +167,7 @@ def _resolve_cname_chain(hostname: str, max_hops: int = 10) -> List[str]:
     current = hostname.rstrip(".")
     for _ in range(max_hops):
         try:
-            ans = _resolve_with_retries(current, "CNAME", attempts=2, raise_on_no_answer=False)
+            ans = _resolve_with_multi_fallback(current, "CNAME", attempts=2, raise_on_no_answer=False)
             if not ans or not getattr(ans, "rrset", None):
                 break
             target = str(ans[0].target).rstrip(".")
@@ -173,13 +180,13 @@ def _resolve_cname_chain(hostname: str, max_hops: int = 10) -> List[str]:
 def _resolve_ips(name: str) -> List[str]:
     ips: List[str] = []
     try:
-        ans = _resolve_with_retries(name, "A", attempts=2, raise_on_no_answer=False)
+        ans = _resolve_with_multi_fallback(name, "A", attempts=2, raise_on_no_answer=False)
         if ans and getattr(ans, "rrset", None):
             ips.extend([r.address for r in ans])
     except Exception:
         pass
     try:
-        ans6 = _resolve_with_retries(name, "AAAA", attempts=2, raise_on_no_answer=False)
+        ans6 = _resolve_with_multi_fallback(name, "AAAA", attempts=2, raise_on_no_answer=False)
         if ans6 and getattr(ans6, "rrset", None):
             ips.extend([r.address for r in ans6])
     except Exception:
@@ -579,7 +586,6 @@ def _tcp_port_state(ip: str, port: int, timeout: float) -> str:
     except ConnectionRefusedError:
         return "closed"
     except OSError:
-        # Includes network unreachable, no route to host, etc.
         return "error"
     except Exception:
         return "error"
@@ -660,7 +666,7 @@ class OwnershipMiddleware:
         extra_cloud_asns: Optional[List[int]] = None,
         # Unknown ASN logging
         unknown_cloud_log: Optional[str] = None,
-        # NEW: multi-ASN sampling
+        # RDAP/WHOIS sampling control for IP whois (propagated from exhaunt.py; backward compatible)
         whois_max_ips: int = 1,
     ):
         self.whois_delay = whois_delay
@@ -687,16 +693,16 @@ class OwnershipMiddleware:
         self._whois_lock = threading.Lock()
         self._whois_last = 0.0
 
-        # NEW: how many IPs to sample for IPWhois RDAP (multi-ASN detection)
-        self.whois_max_ips = max(1, int(whois_max_ips))
+        # how many IPs to sample for IPWhois (first N)
+        self._whois_max_ips = max(1, int(whois_max_ips))
 
-    # DNS provider (unchanged)
+    # DNS provider (unchanged except resolver fallback)
     def get_dns_provider(self, domain: str) -> Dict:
         base = _registrable_domain(domain)
         result = {"ns": [], "dns_error": None, "classification": classify(Risk.OK, "NS present", {})}
         try:
             try:
-                ans = _resolve_with_retries(base, "NS", attempts=3, raise_on_no_answer=False)
+                ans = _resolve_with_multi_fallback(base, "NS", attempts=2, raise_on_no_answer=False)
             except dns.resolver.NXDOMAIN:
                 msg = f"The DNS query name does not exist: {base}."
                 rd = _rdap_query_domain(base, mode=getattr(self, "rdap_mode", "fast"))
@@ -773,46 +779,27 @@ class OwnershipMiddleware:
         svc["ips"] = ips
         svc["loose_match_provider"] = any(terminal.lower().endswith(suf) for suf in PROVIDER_SUFFIXES)
 
-        # --- Multi-ASN sampling: RDAP for up to whois_max_ips, keep legacy first summary
-        asns = set()
-        ip_whois_all = []
+        # IPWhois sampling (first N IPs)
         if ips and IPWhois is not None:
-            for ip in ips[: self.whois_max_ips]:
+            info_primary = None
+            for ip in ips[: self._whois_max_ips]:
                 info = _ipwhois_lookup(ip)
-                if info:
-                    ip_whois_all.append({
-                        "ip": ip,
-                        "asn": info.get("asn"),
-                        "asn_description": info.get("asn_description"),
-                        "asn_country_code": info.get("asn_country_code"),
-                        "network_name": (info.get("network") or {}).get("name"),
-                    })
-                    if info.get("asn"):
-                        asns.add(str(info.get("asn")))
+                if info and not info_primary:
+                    info_primary = info
+            if info_primary:
+                svc["ip_whois"] = {
+                    "asn": info_primary.get("asn"),
+                    "asn_description": info_primary.get("asn_description"),
+                    "asn_country_code": info_primary.get("asn_country_code"),
+                    "network_name": (info_primary.get("network") or {}).get("name"),
+                    "raw": info_primary,  # keep raw for deeper analysis if needed
+                }
 
-        if ip_whois_all:
-            first = ip_whois_all[0]
-            # legacy single-slot summary (unchanged for downstream)
-            svc["ip_whois"] = {
-                "asn": first.get("asn"),
-                "asn_description": first.get("asn_description"),
-                "asn_country_code": first.get("asn_country_code"),
-                "network_name": first.get("network_name"),
-                "raw": _ipwhois_lookup(ip_whois_all[0]["ip"])  # keep raw for first as before
-            }
-            # non-breaking enrichment for power users
-            svc["ip_whois_all"] = ip_whois_all
-
-        # RDAP check for terminal registrable domain
         term_reg = _registrable_domain(terminal)
         base_reg = _registrable_domain(hostname)
         if term_reg and term_reg != base_reg:
             svc.setdefault("rdap", {})
             svc["rdap"][term_reg] = _rdap_query_domain(term_reg, mode=getattr(self, "rdap_mode", "fast"))
-
-        # remember if we saw different ASNs across sampled IPs
-        self._last_multi_asn = (len(asns) > 1)
-
         return svc
 
     def _log_unknown_cloud(self, hostname: str, ips: List[str], ipw: dict):
@@ -889,7 +876,7 @@ class OwnershipMiddleware:
 
         hostname_ips = _resolve_ips(hostname)
 
-        # Takeover confidence
+        # Takeover confidence (new)
         takeover_confidence = _grade_takeover_confidence(
             takeover_type=takeover_type,
             http_probe=http_probe,
@@ -897,7 +884,7 @@ class OwnershipMiddleware:
             mode=self.mode
         )
 
-        result = {
+        return {
             "hostname": hostname,
             "base_domain": base_domain,
             "hostname_ips": hostname_ips,
@@ -905,7 +892,7 @@ class OwnershipMiddleware:
             "domain_owner": domain_owner,
             "service_provider": service_provider,
             "http_probe": http_probe,
-            "tcp_states": tcp_states,                # for CSV/JSON, not printed on console
+            "tcp_states": tcp_states,                # kept out of console; used in CSV/JSON
             "takeover_type": takeover_type,
             "takeover_confidence": takeover_confidence,
             "http_fingerprints": fp_names,
@@ -913,12 +900,3 @@ class OwnershipMiddleware:
             "mode": self.mode,
             "rdap_mode": self.rdap_mode,
         }
-
-        # Surface multi_asn only when user asked us to sample >1 IP
-        try:
-            if self.whois_max_ips > 1:
-                result["multi_asn"] = bool(getattr(self, "_last_multi_asn", False))
-        except Exception:
-            pass
-
-        return result

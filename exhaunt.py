@@ -87,7 +87,7 @@ def _flatten_row(r: dict) -> dict:
         "service_asn_desc": ipw.get("asn_description") or "",
         "takeover_type": r.get("takeover_type") or "",
         "takeover_confidence": (r.get("takeover_confidence") or ""),
-        "http_fp": _fmt_fp(r.get("http_fingerprints") or []),
+        "http_fingerprint": _fmt_fp(r.get("http_fingerprints") or []),
         "tcp_80": tcp80,
         "tcp_443": tcp443,
     }
@@ -164,7 +164,7 @@ def _compact_result(r: dict) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ExHaunt 👻 by a9hora — Subdomain Takeover & Ownership Analyzer",
+        description="ExHaunt 👻 by a9hora — Subdomain Takeover & Ownership Analyzer.....\n",
         epilog="""Examples:
   python exhaunt.py --file subs.txt
   python exhaunt.py --subs www.example.com api.example.com
@@ -227,9 +227,6 @@ def main():
     if args.color:
         os.environ["EXHAUNT_COLOR"] = "1"
 
-    if args.color and not args.quiet:
-        print("ExHaunt 👻 by a9hora — scanning for haunted subdomains…")
-
     # threads
     if str(args.threads).lower() == "auto":
         max_workers = min(64, (os.cpu_count() or 4) * 2)
@@ -284,6 +281,10 @@ def main():
             disable=args.quiet,
             log_file=args.logfile,
         )
+        # Initialize the bar BEFORE any output, then write the banner through progress
+        progress.start()
+        if args.color and not args.quiet:
+            progress.write("\nExHaunt 👻 by a9hora — scanning for haunted subdomains...\n")
 
         for f in progress.wrap_futures(futs):
             res = f.result()
@@ -300,8 +301,8 @@ def main():
                     reason = cls.get("reason", "")
                     fp = ";".join(res.get("http_fingerprints") or []) or "no fingerprints matched"
                     conf = res.get("takeover_confidence")
-                    extra = f" | CONF={conf}" if conf else ""
-                    print(Fore.RED + f"[{risk}] {host} :: {reason} | TAKEOVER={takeover_type}{extra} | FP={fp}" + Style.RESET_ALL)
+                    extra = f" | CONF = {conf}" if conf else ""
+                    progress.write(Fore.RED + f"[{risk}] {host} :: {reason} | TAKEOVER = {takeover_type}{extra} | FingerPrint = {fp}" + Style.RESET_ALL)
 
     # JSON
     if args.json_compact:
@@ -320,8 +321,7 @@ def main():
     ]
     write_csv(flat_rows, f"{output_prefix}.csv", fieldnames)
 
-    # final summary
-    # final summary (compact; no TCP state printed)
+    # final summary (print above the bar through progress)
     if args.color and args.print_mode in ("summary", "both"):
         for r in results:
             host = r.get("hostname", "?")
@@ -337,19 +337,19 @@ def main():
             takeover_type = r.get("takeover_type") or ""
             fp = ";".join(r.get("http_fingerprints") or []) or "no fingerprints matched"
             conf = r.get("takeover_confidence")
-    
+
             if risk == "VULNERABLE": color = Fore.RED
             elif risk in ("BROKEN","ENV_ERROR"): color = Fore.YELLOW
             elif risk == "RETRY": color = Fore.MAGENTA
             else: color = Fore.CYAN
-    
-            line = f"[{risk}] {host} :: {reason} | TAKEOVER={takeover_type}"
-            if conf: line += f" | CONF={conf.upper()}"
-            line += f" | NS={ns} | WHOIS_ORG={owner}"
+
+            line = f"[{risk}] {host} :: {reason} | TAKEOVER = {takeover_type}"
+            if conf: line += f" | CONF = {conf.upper()}"
+            line += f" | NS = {ns} | WHOIS_ORG = {owner}"
             if cname: line += f" | CNAME→{cname[-1]}"
-            if asn or asn_desc: line += f" | ASN={asn} ({asn_desc})"
-            if fp: line += f" | FP={fp}"
-            print(color + line + Style.RESET_ALL)
+            if asn or asn_desc: line += f" | ASN = {asn} ({asn_desc})"
+            if fp: line += f" | FingerPrint = {fp}"
+            progress.write(color + line + Style.RESET_ALL)
 
 if __name__ == "__main__":
     main()

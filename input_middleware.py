@@ -1,14 +1,20 @@
-from pathlib import Path
+import os
 
-def read_input_file(file_path: str) -> list:
+def read_input_file(path: str) -> list[str]:
     """
-    Reads subdomains from a text file (one per line).
-    Returns a list of subdomains.
+    Read subdomains from a file (one per line), stripping comments/empties.
+    Returns in file order (stable), de-duplicated.
     """
-    path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Input file not found: {file_path}")
-
-    with path.open("r") as f:
-        subdomains = [line.strip() for line in f if line.strip()]
-    return subdomains
+    if not os.path.isfile(path):
+        return []
+    seen = set()
+    out = []
+    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+        for line in fh:
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            if s not in seen:
+                out.append(s)
+                seen.add(s)
+    return out

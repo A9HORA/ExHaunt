@@ -1,41 +1,96 @@
+# ======================================================================
+# ExHaunt provider taxonomy
+# ======================================================================
+# This file defines ASN numbers and regex patterns used to classify
+# IP ownership and hosting providers.  It helps ExHaunt recognize
+# cloud infrastructure vs. on-prem / enterprise networks.
+#
+# - ASNs: numeric identifiers for cloud/CDN providers.
+# - patterns: regex fragments (case-insensitive) that appear in
+#   RDAP/WHOIS fields such as asn_description, net_name, or org_name.
+#
+# To extend coverage:
+#   • Add new ASN values to the list below.
+#   • Add regex fragments to “patterns” (avoid overly generic words).
+#
+# ----------------------------------------------------------------------
+
 asns:
-  - 15169     # Google
-  - 396982    # Google Cloud (US)
-  - 16509     # Amazon
-  - 14618     # Amazon-02
-  - 8075      # Microsoft
-  - 13335     # Cloudflare
-  - 54113     # Fastly
-  - 16625     # Akamai
-  - 63949     # Akamai/Linode
-  - 14061     # DigitalOcean
-  - 20473     # Vultr
-  - 24940     # Hetzner
-  - 16276     # OVH
-  - 31898     # Oracle
-  - 45102     # Alibaba
-  - 132203    # Tencent
-  - 8928      # Leaseweb
-  - 19551     # Packet/Equinix
-  - 8256      # Scaleway
+  # --- Public cloud providers ---
+  - 15169      # Google Cloud / Google LLC
+  - 16509      # Amazon / AWS
+  - 8075       # Microsoft Corporation (Azure)
+  - 14618      # Amazon AWS EC2 (older)
+  - 396982     # Google Cloud Platform (North America)
+  - 13335      # Cloudflare
+  - 209242     # Cloudflare Europe
+  - 20940      # Akamai Technologies
+  - 16625      # Akamai Technologies
+  - 35994      # Akamai Technologies
+  - 32244      # Liquid Web / Nexcess
+  - 14061      # DigitalOcean
+  - 31898      # Oracle Cloud
+  - 45102      # Alibaba Cloud
+  - 63949      # Linode / Akamai Connected Cloud
+  - 14618      # AWS EC2 Global
+  - 8070       # Microsoft (legacy Azure)
+  - 19527      # Linode legacy
+  - 46489      # Twilio / SendGrid
+  - 54825      # Fastly, Inc.
+  - 54113      # Fastly, Inc.
+  - 209242     # Cloudflare (EU)
+  - 9009       # M247 / general hosting (edge)
+  - 399271     # Netlify, Inc.
+  - 13335      # Cloudflare (repeated intentionally for clarity)
+  - 15133      # Edgecast / Verizon Digital Media
+  - 14618      # AWS (regional duplicates harmless)
 
 patterns:
-  - "google|google[-\\s]?cloud|gcp|google cloud platform"
-  - "amazon|aws|amazon[-\\s]?technologies|amazon[-\\s]?aes"
-  - "microsoft|azure"
-  - "cloudflare"
-  - "fastly"
-  - "akamai|linode"
+  # --- Cloud providers ---
+  - "amazon|aws|amazon[-\\s]?technologies|ec2|elastic"
+  - "google|google[-\\s]?cloud|gcp|google\\s?llc"
+  - "microsoft|azure|windows[-\\s]?azure"
+  - "oracle\\s?cloud|oracle"
   - "digitalocean"
+  - "linode|akamai\\s?connected\\s?cloud"
+  - "alibaba|aliyun"
+  - "ibm\\s?cloud|softlayer"
+  - "heroku"
+  - "vercel"
+  - "netlify"
+  - "fastly"
+  - "cloudflare"
+  - "akamai"
+  - "stackpath|stackpath\\s?cdn"
+  - "cdn77|cdn\\s?77"
   - "vultr"
   - "hetzner"
-  - "ovh|ovhcloud"
-  - "oracle"
-  - "alibaba|aliyun"
-  - "tencent"
-  - "leaseweb"
-  - "equinix|packet"
-  - "scaleway"
-  - "upcloud"
-  - "render"
-  - "fly\\.io|flyio"
+  - "ovh"
+  - "contabo"
+  - "googleusercontent"
+  - "awsdns|amazonaws\\.com"
+  - "blob\\.core\\.windows\\.net"
+  - "storage\\.googleapis\\.com"
+  - "s3\\.amazonaws\\.com"
+  - "trafficmanager\\.net"
+  - "azurewebsites\\.net"
+  - "verizon\\s?digital"
+  - "render\\.com"
+  - "pages\\.github\\.com|githubusercontent"
+  - "gitlab|glcdn"
+  - "fly\\.io"
+  - "firebase"
+  - "wasabisys"
+  - "cdn\\."
+  - "edgekey"
+  - "akamaiedge"
+
+# ======================================================================
+# Notes:
+#   • This file intentionally includes some overlapping regex fragments;
+#     ExHaunt treats them as case-insensitive OR matches.
+#   • Avoid adding too-generic words like “cloud” or “hosting” to prevent
+#     false positives for enterprise networks.
+#   • You can maintain your own custom overlay by providing
+#     --providers-file /path/to/custom.yaml
+# ======================================================================
