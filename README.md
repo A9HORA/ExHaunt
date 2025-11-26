@@ -255,7 +255,8 @@ python3 exhaunt.py --file subs.txt --mode strict --json-compact --quiet --thread
 
 ## 📜 License
 
-Licensed under MIT. See `LICENSE`.
+Licensed under the **ExHaunt Proprietary License** — no redistribution, no derivatives, contribution only with explicit permission.  
+See [LICENSE](LICENSE) for full terms.
 
 ---
 
