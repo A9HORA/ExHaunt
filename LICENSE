@@ -2,45 +2,78 @@ ExHaunt Proprietary License
 Copyright (c) 2025 A9HORA
 All rights reserved.
 
-Permission is hereby granted to the end user to use the ExHaunt software
-and its accompanying files (“the Software”) for personal or internal
+Permission is granted to the end user (“User”) to download, install, and
+use the ExHaunt software (“the Software”) for personal or internal
 organizational purposes only.
 
-The following actions are strictly prohibited:
+The following actions are strictly prohibited unless explicit written
+permission is granted by A9HORA:
 
-1. Redistribution  
-   You may NOT distribute, publish, upload, or share the Software or any
-   part of its source code, binaries, fingerprints, provider files, or
-   documentation in any public or private repository, marketplace,
-   service, or platform.
+1. Redistribution
+   The User may NOT reproduce, distribute, publish, upload, or share the
+   Software, its source code, compiled binaries, fingerprints, provider
+   files, or documentation in any public or private repository, registry,
+   marketplace, or platform.
 
-2. Commercial Use  
-   You may NOT sell, license, rent, lease, or offer the Software as a
-   service, either directly or as part of any commercial product,
-   cybersecurity service, SaaS platform, or consulting package.
+2. Commercial Use
+   The User may NOT sell, license, sublicense, rent, lease, monetize, or
+   offer the Software as part of any commercial product, cybersecurity
+   service, or scanning platform.
 
-3. Modification & Derivative Works  
-   You may NOT modify, fork, translate, reverse engineer, decompile,
-   disassemble, or create derivative works based on the Software or
-   any portion of its code, structure, logic, or design.
+3. Modification & Derivative Works
+   The User may NOT modify, fork, translate, reverse engineer, decompile,
+   disassemble, or create derivative works based on the Software or any
+   portion of its design, logic, algorithms, fingerprints, or structure.
 
-4. Rebranding  
-   You may NOT rename, rebrand, or remove attribution from the Software,
-   including icons, banners, internal identifiers, documentation, or output.
+4. Rebranding
+   The User may NOT rename, rebrand, remove attribution, obscure, or
+   otherwise alter the identity of the Software in any context.
 
-5. Automated Redistribution  
-   You may NOT incorporate the Software into any automated CI/CD,
-   scanning service, continuous monitoring system, or distributed
-   scanning infrastructure intended for external users.
+5. Automated Redistribution
+   The User may NOT embed or integrate the Software into automated
+   platforms, CI/CD services, scanning pipelines, or multi-tenant systems
+   intended for third parties.
 
-Attribution  
-You must retain the “ExHaunt” name and credit to A9HORA in all permitted
-uses of the Software.
+----------------------------------------------------------------------
+Contributor Policy (Permission-Based Contributions Only)
+----------------------------------------------------------------------
 
-Disclaimer  
-The Software is provided “as is”, without warranty of any kind, express
-or implied. In no event shall the authors or copyright holders be liable
-for any claim, damages, or liability arising from the use of the Software.
+6. Contributions & Pull Requests
+   The Software is not open-source. Contributions, fixes, improvements, or
+   enhancements to the Software are only permitted when:
 
-By using the Software, you acknowledge that you have read, understood,
-and agreed to these terms.
+     a. The User obtains explicit written permission from A9HORA prior to
+        submitting contributions or modifications, AND
+
+     b. All contributions are transferred under full ownership and
+        copyright to A9HORA upon submission, including any associated
+        rights, without compensation unless separately agreed.
+
+   Without prior written authorization, the User may NOT:
+     • submit pull requests
+     • publish patches
+     • fork the repository for development
+     • modify internal files for the purpose of contribution
+
+   Permission may be granted or revoked solely at the discretion of A9HORA.
+
+----------------------------------------------------------------------
+Attribution Requirement
+----------------------------------------------------------------------
+
+7. Attribution
+   The name “ExHaunt” and authorship credit to A9HORA must be retained in
+   all permitted uses, documentation, screenshots, citations, and outputs.
+
+----------------------------------------------------------------------
+Warranty & Liability
+----------------------------------------------------------------------
+
+8. Disclaimer
+   The Software is provided “as is,” without any express or implied
+   warranty. A9HORA shall not be liable for any direct, indirect,
+   incidental, or consequential damages arising from use of the Software.
+
+9. Acceptance
+   By using the Software, the User acknowledges that they have read,
+   understood, and agreed to the terms of this license.
