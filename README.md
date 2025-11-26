@@ -6,6 +6,11 @@ ExHaunt helps you identify **risky, abandoned, or misconfigured subdomains** bef
 It sorts each subdomain into clear categories — `OK`, `VULNERABLE`, `BROKEN`, `RETRY`, `ENV_ERROR` — and assigns a **confidence level** so you understand which findings truly matter.
 
 > Built & maintained by **[A9HORA](https://x.com/A9HORA)**
+> <p align="center">
+  <a href="https://buymeacoffee.com/a9hora" target="_blank">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" height="50" alt="Buy Me A Coffee" />
+  </a>
+</p>  
 
 ---
 
