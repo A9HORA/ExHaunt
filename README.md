@@ -51,7 +51,7 @@ It sorts each subdomain into clear categories — `OK`, `VULNERABLE`, `BROKEN`, 
 * `--mode loose` = exploratory, more suspicious leads.
 * `--rdap-mode fast` = fastest.
 * `--rdap-mode polite` = most reliable.
-* WHOIS errors do **not** decide risk (DNS + registry do).
+* WHOIS problems **do not** affect risk scoring — DNS + registry data drive classification.
 
 ---
 
@@ -60,6 +60,90 @@ It sorts each subdomain into clear categories — `OK`, `VULNERABLE`, `BROKEN`, 
 ```bash
 python3 exhaunt.py [OPTIONS]
 ```
+
+### Input (required)
+Exactly one of `--file` or `--subs` is required.
+* `--file FILE` — read subdomains from a file (one per line)
+  → Outputs: `FILE.json`, `FILE.csv`
+* `--subs SUB [SUB ...]` — pass subdomains directly
+  → Outputs: `console_input.json`, `console_input.csv`
+
+### Detection & RDAP Modes
+
+* `--mode {strict,loose}` *(default: strict)*
+  `strict` = evidence‑based only.
+  `loose`  = also flag suspicious / heuristic cases.
+
+* `--rdap-mode {fast,polite}` *(default: fast)*
+  `fast`   = single RDAP attempt (quick).
+  `polite` = retries with backoff, honors `Retry-After` (slower, more resilient).
+
+### WHOIS
+
+* `--whois-delay SECONDS` *(default: 1.0)*
+  Minimum gap between WHOIS queries across threads.
+  Increase to 2–3s if registries start rate‑limiting.
+
+* `--whois-max-ips N` *(default: 1)*
+  Sample up to N IPs per host for IPWhois / ASN context and TCP checks.
+
+### HTTP / TLS Probing
+
+* `--http-probe` — enable HTTP/TLS probing + fingerprinting.
+* `--no-sni` — also probe HTTPS without SNI (extra context only).
+* `--http-timeout SECONDS` *(default: 3.0)* — per‑probe timeout.
+* `--http-retries N` *(default: 1)* — light resilience to transient issues.
+* `--http-max-ips N` *(default: 2)* — max IPs to probe per host.
+* `--fp-file PATH` — custom `fingerprints.yaml` (defaults to bundled file).
+
+### Provider / Cloud Awareness
+
+* `--providers-file PATH` — custom `providers.yaml` for ASN/provider mapping.
+* `--add-cloud-marker REGEX` — add extra provider patterns (repeatable).
+* `--cloud-asn ASN` — mark specific ASNs as "cloud" (repeatable).
+* `--unknown-cloud-log FILE` — log cloudy‑but‑unknown ASNs as CSV.
+
+### Performance
+
+* `--threads N` — fixed worker count (default: 10).
+* `--threads auto` — auto‑scale up to `min(64, 2 × CPU)`.
+
+### Output & Display
+
+* `--color` — colored console output + colored warnings.
+* `--quiet` — hide progress bar (good for CI).
+* `--logfile FILE` — log progress to a file.
+* `--print {short,summary,both}` *(default: both)*
+
+  * `short`   — only live alert lines while scanning.
+  * `summary` — only final recap lines.
+  * `both`    — live alerts + final recap.
+
+### JSON / CSV Control
+
+* `--json-compact` — write a trimmed JSON: drops heavy debug blobs
+  (raw RDAP, full IPWhois, per‑IP HTTP bodies) but keeps all
+  decision‑critical fields (classification, ASN, takeover type,
+  takeover confidence, tcp states, etc.).
+
+---
+
+## 📊 Classification
+
+### Risk Levels
+
+* **OK** — healthy
+* **VULNERABLE** — confirmed risk
+* **BROKEN** — DNS misconfiguration
+* **RETRY** — temporary timeout
+* **ENV_ERROR** — local/system issue
+
+### Confidence Levels
+
+* **none** — no evidence
+* **low** — weak signals
+* **medium** — moderate signals
+* **high** — strong indicators
 
 ---
 
@@ -131,70 +215,6 @@ docker run --rm -it \
 * **file not found** → ensure the file exists in the mounted folder
 * **permission denied (Linux)** → use: `-u $(id -u):$(id -g)`
 * **docker: command not found** → install Docker Desktop/Engine
-
----
-
-### Detection Modes
-
-* `--mode strict` (default)
-* `--mode loose`
-
-### RDAP Modes
-
-* `--rdap-mode fast` (default)
-* `--rdap-mode polite`
-
-### WHOIS
-
-* `--whois-delay N` — prevent rate-limiting
-* `--whois-max-ips N` — multi-IP ASN sampling
-
-### HTTP/TLS Probing
-
-* `--http-probe`
-* `--no-sni`
-* `--http-timeout N`
-* `--http-retries N`
-* `--http-max-ips N`
-* `--fp-file FILE`
-
-### Cloud Provider Matching
-
-* `--providers-file FILE`
-* `--add-cloud-marker REGEX`
-* `--cloud-asn N`
-* `--unknown-cloud-log FILE`
-
-### Output & Display
-
-* `--print {short, summary, both}`
-* `--quiet`
-* `--color`
-* `--logfile FILE`
-* `--json-compact`
-
-### Performance
-
-* `--threads N` or `auto`
-
----
-
-## 📊 Classification
-
-### Risk Levels
-
-* **OK** — healthy
-* **VULNERABLE** — confirmed risk
-* **BROKEN** — DNS misconfiguration
-* **RETRY** — temporary timeout
-* **ENV_ERROR** — local/system issue
-
-### Confidence Levels
-
-* **none** — no evidence
-* **low** — weak signals
-* **medium** — moderate signals
-* **high** — strong indicators
 
 ---
 
