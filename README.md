@@ -61,21 +61,11 @@ It sorts each subdomain into clear categories — `OK`, `VULNERABLE`, `BROKEN`, 
 python3 exhaunt.py [OPTIONS]
 ```
 
-### Docker usage (optional)
-
-ExHaunt ships as a **self-contained, portable Docker image** that works offline on any OS (Windows, macOS, Linux) and requires **no Python**, **no dependencies**, and **no internet access**.
-
-You can run ExHaunt in three ways:
-
-1. Build your own image from the Dockerfile, **or**
-2. Load a prebuilt offline portable `.tar` image (arm64 or amd64), **or**
-3. Pull from a registry (future roadmap).
-
 ---
 
 #### 🧭 Building Your Own Docker Image
 
-ExHaunt provides a Dockerfile so **you can build your own image locally**.
+ExHaunt has a Dockerfile that let's **you build your own docker image locally that requires no Python, no dependencies**.
 
 Build the image:
 
@@ -88,11 +78,6 @@ Verify:
 ```bash
 docker images | grep exhaunt
 ```
-
-```bash
-docker images | grep exhaunt
-```
-
 ---
 
 #### ⚙️ Run ExHaunt (Docker)
@@ -102,15 +87,13 @@ From your working directory:
 ```bash
 docker run --rm -it \
   -v "$PWD":/workspace \
-  exhaunt:amd64 \
+  exhaunt:latest \
   --file YourSubDomains.txt \
   --threads auto --whois-delay 2 --color \
   --mode strict --rdap-mode polite --print short \
   --http-probe --http-timeout 8 --http-retries 2 \
   --http-max-ips 3 --no-sni --whois-max-ips 5
 ```
-
-(Use `exhaunt:arm64` on Apple Silicon or ARM servers.)
 
 Outputs (JSON + CSV) are written back to the **same directory** you mounted.
 
@@ -125,7 +108,7 @@ docker run --rm -it \
   -v "$PWD":/workspace \
   -v "$PWD/my-fingerprints.yaml":/fingerprints.yaml:ro \
   -v "$PWD/my-providers.yaml":/providers.yaml:ro \
-  exhaunt:amd64 --file YourSubDomains.txt
+  exhaunt:latest --file YourSubDomains.txt
 ```
 
 Or mount a folder and point explicitly:
@@ -134,7 +117,7 @@ Or mount a folder and point explicitly:
 docker run --rm -it \
   -v "$PWD":/workspace \
   -v "$PWD/configs":/configs:ro \
-  exhaunt:amd64 \
+  exhaunt:latest \
   --file YourSubDomains.txt \
   --fp-file /configs/fingerprints.yaml \
   --providers-file /configs/providers.yaml
