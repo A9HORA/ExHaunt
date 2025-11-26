@@ -2,52 +2,56 @@
 
 *Find and classify dangling subdomains before they haunt you.*
 
-ExHaunt an analyst's tool helps you discover **dangling subdomains** (CNAMEs pointing to unclaimed services or dead domains) and sorts them into clear buckets:
-`OK`, `VULNERABLE`, `BROKEN`, `RETRY`, `ENV_ERROR`. Each result comes with evidence and confidence.
+ExHaunt helps you identify **risky, abandoned, or misconfigured subdomains** before attackers take advantage of them.
+It sorts each subdomain into clear categories — `OK`, `VULNERABLE`, `BROKEN`, `RETRY`, `ENV_ERROR` — and assigns a **confidence level** so you understand which findings truly matter.
 
-> Built & maintained by **[A9HORA](https://twitter.com/A9HORA)**
+> Built & maintained by **A9HORA**
 
 ---
 
 ## ✨ Features & Roadmap
 
 ### ✅ Existing
-- [x] **DNS resolution with retries & fallbacks** — ensures reliability across resolvers.  
-- [x] **RDAP lookups (`fast` / `polite`)** — confirms domain availability with configurable accuracy vs. speed.  
-- [x] **WHOIS ownership lookups with delay** — provides registrar/owner context without overwhelming servers.  
-- [x] **CNAME chain detection** — surfaces the final service a subdomain resolves to.  
-- [x] **IPWhois enrichment** — ASN and network data helps identify hosting providers.  
-- [x] **TLS certificate fallback** — extracts cert subject/issuer when WHOIS is masked.  
-- [x] **Strict vs Loose detection modes** — balances accuracy vs. exploratory hunting.  
-- [x] **Classification matrix** (`OK`, `VULNERABLE`, `BROKEN`, `RETRY`, `ENV_ERROR`) — clear triage categories.  
-- [x] **Color-coded live and summary output** — fast visual scanning of vulnerable subs.  
-- [x] **CSV + JSON reports** — easy integration with spreadsheets and other tools.  
-- [x] **Progress bar & logging** — user-friendly tracking for large lists.  
+
+* [x] **DNS resolution with retries & fallbacks** — ensures reliability across resolvers.
+* [x] **RDAP lookups (`fast` / `polite`)** — confirms domain availability with configurable accuracy vs. speed.
+* [x] **WHOIS ownership lookups with delay** — provides registrar/owner context without overwhelming servers.
+* [x] **CNAME chain detection** — surfaces the final service a subdomain resolves to.
+* [x] **IPWhois enrichment** — ASN and network data helps identify hosting providers.
+* [x] **TLS certificate fallback** — extracts cert subject/issuer when WHOIS is masked.
+* [x] **Strict vs Loose detection modes** — balances accuracy vs. exploratory hunting.
+* [x] **Classification matrix** (`OK`, `VULNERABLE`, `BROKEN`, `RETRY`, `ENV_ERROR`) — clear triage categories.
+* [x] **Color-coded live and summary output** — fast visual scanning of interesting subdomains.
+* [x] **CSV + JSON reports** — easy integration with spreadsheets and other tools.
+* [x] **Progress bar & logging** — user-friendly tracking for large lists.
+* [x] **Takeover confidence grading** — low/medium/high hints for cloud IP reuse candidates.
+* [x] **Compact JSON mode** — optional trimmed JSON output that keeps decision-critical fields but drops heavy debug blobs.
+* [x] **TCP reachability probing (80/443)** — silent port checks surfaced in JSON/CSV for extra context.
+* [x] **Container-ready single binary** — optional Docker image that packages ExHaunt as a self-contained CLI (no Python/runtime needed in the container).
+* [x] **Provider HTTP fingerprinting** — identifies characteristic default responses from cloud services to strengthen takeover confirmation.
+* [x] **External fingerprint library (YAML-based)** — supports customizable fingerprint rules without changing code `(extendable via fingerprints.yaml)`.
 
 ### 🔮 Upcoming
-- [ ] **Provider HTTP fingerprinting** — detect “unclaimed” error pages (S3, GitHub Pages, Azure, etc.) for strict, high-confidence vuln confirmation.  
-- [ ] **`--skip-whois` flag** — faster scans, cleaner logs when ownership info isn’t needed.  
-- [ ] **`--only-vulnerable` flag** — print/export only vulnerable subs for CI/CD or bug bounty workflows.  
-- [ ] **CSV flattening for nested fields** — dotted keys like `dns_provider.classification.risk` for easier spreadsheet use.  
-- [ ] **Fingerprint library in YAML/JSON** — community-driven updates without touching Python code.  
-- [ ] **Export to Markdown/HTML report** — human-readable bug bounty & audit reports.  
-- [ ] **Configurable retry/backoff policies** — fine-tune RDAP/WHOIS behavior per environment.  
-- [ ] **Docker image release** — one-liner deployment (`docker run a9hora/exhaunt`).  
-- [ ] **CI/CD integration hooks (GitHub Actions template)** — continuous monitoring of your zones.  
-- [ ] **Domain auto-expansion** (`*.domain.com` integration with Amass/Subfinder) — all-in-one discovery + takeover check.  
-- [ ] **Severity scoring** — rank vulns by confidence/severity for easier triage.  
+
+* **Expanded HTTP fingerprint coverage** — broader recognition of provider-specific default responses.
+* **`--skip-whois` mode** — faster scans by disabling WHOIS ownership lookups when not needed.
+* **`--only-vulnerable` output mode** — print or export only high-risk findings (ideal for CI/CD and bug bounty workflows).
+* **Dot-notation CSV flattening** — advanced spreadsheet-friendly field mappings like dns_provider.ns[0].
+* **Markdown/HTML reporting** — clean human-readable reports for auditors and leadership.
+* **Enhanced retry/backoff tuning** — user-configurable DNS/RDAP/HTTP retry strategies.
+* **CI/CD templates (GitHub Actions, GitLab, etc.)** — automated periodic scanning pipelines.
+* **Domain expansion integrations** — optional pairing with external discovery tools (Amass, Subfinder).
+* **Numerical severity scoring** — risk scoring system for automated prioritization.
 
 ---
 
 ## 🧭 Quick Start Cheat Sheet
 
-> **New to ExHaunt?**
->
-> * `--mode strict` = fewer, high-confidence vulns.
-> * `--mode loose` = more hits, includes weaker signals (exploratory).
-> * `--rdap-mode fast` = quickest, single registry query.
-> * `--rdap-mode polite` = retries with backoff for better availability accuracy.
-> * WHOIS errors **do not** affect vulnerability classification (DNS + RDAP decide).
+* `--mode strict` = high-confidence findings only.
+* `--mode loose` = exploratory, more suspicious leads.
+* `--rdap-mode fast` = fastest.
+* `--rdap-mode polite` = most reliable.
+* WHOIS errors do **not** decide risk (DNS + registry do).
 
 ---
 
@@ -57,151 +61,222 @@ ExHaunt an analyst's tool helps you discover **dangling subdomains** (CNAMEs poi
 python3 exhaunt.py [OPTIONS]
 ```
 
-### Input (required)
+### Docker usage (optional)
 
-* `--file FILE` — read subdomains from a file (one per line)
-  → Outputs: `FILE.json`, `FILE.csv`
-* `--subs SUB [SUB ...]` — pass subdomains directly
-  → Outputs: `console_input.json`, `console_input.csv`
+ExHaunt ships as a **self-contained, portable Docker image** that works offline on any OS (Windows, macOS, Linux) and requires **no Python**, **no dependencies**, and **no internet access**.
+
+You can run ExHaunt in three ways:
+
+1. Build your own image from the Dockerfile, **or**
+2. Load a prebuilt offline portable `.tar` image (arm64 or amd64), **or**
+3. Pull from a registry (future roadmap).
+
+---
+
+#### 🧭 Building Your Own Docker Image
+
+ExHaunt provides a Dockerfile so **you can build your own image locally**.
+
+Build the image:
+
+```bash
+docker build -t exhaunt .
+```
+
+Verify:
+
+```bash
+docker images | grep exhaunt
+```
+
+```bash
+docker images | grep exhaunt
+```
+
+---
+
+#### ⚙️ Run ExHaunt (Docker)
+
+From your working directory:
+
+```bash
+docker run --rm -it \
+  -v "$PWD":/workspace \
+  exhaunt:amd64 \
+  --file YourSubDomains.txt \
+  --threads auto --whois-delay 2 --color \
+  --mode strict --rdap-mode polite --print short \
+  --http-probe --http-timeout 8 --http-retries 2 \
+  --http-max-ips 3 --no-sni --whois-max-ips 5
+```
+
+(Use `exhaunt:arm64` on Apple Silicon or ARM servers.)
+
+Outputs (JSON + CSV) are written back to the **same directory** you mounted.
+
+---
+
+#### 🧩 Using Custom Providers / Fingerprints
+
+Override built-in YAML files by mounting your own:
+
+```bash
+docker run --rm -it \
+  -v "$PWD":/workspace \
+  -v "$PWD/my-fingerprints.yaml":/fingerprints.yaml:ro \
+  -v "$PWD/my-providers.yaml":/providers.yaml:ro \
+  exhaunt:amd64 --file YourSubDomains.txt
+```
+
+Or mount a folder and point explicitly:
+
+```bash
+docker run --rm -it \
+  -v "$PWD":/workspace \
+  -v "$PWD/configs":/configs:ro \
+  exhaunt:amd64 \
+  --file YourSubDomains.txt \
+  --fp-file /configs/fingerprints.yaml \
+  --providers-file /configs/providers.yaml
+```
+
+---
+
+#### 🐛 Troubleshooting
+
+* **exec format error** → loaded wrong architecture (arm64 vs amd64)
+* **file not found** → ensure the file exists in the mounted folder
+* **permission denied (Linux)** → use: `-u $(id -u):$(id -g)`
+* **docker: command not found** → install Docker Desktop/Engine
+
+---
 
 ### Detection Modes
 
-* `--mode strict` *(default)* — **hard evidence only** (NXDOMAIN + RDAP confirms unregistered)
-* `--mode loose` — **also haunts suspicious but unproven cases** (timeouts, empty NS, provider suffix suspects)
+* `--mode strict` (default)
+* `--mode loose`
 
 ### RDAP Modes
 
-* `--rdap-mode fast` *(default)* — single RDAP try per registry (fastest)
-* `--rdap-mode polite` — retries with exponential backoff, honors `Retry-After` (slower, more resilient)
+* `--rdap-mode fast` (default)
+* `--rdap-mode polite`
 
 ### WHOIS
 
-* `--whois-delay SECONDS` *(default: 1.0)* — minimum spacing between WHOIS queries across threads
-  Raise to 2.0–3.0s if you see rate-limit errors in logs.
+* `--whois-delay N` — prevent rate-limiting
+* `--whois-max-ips N` — multi-IP ASN sampling
 
-### Performance
+### HTTP/TLS Probing
 
-* `--threads N` — number of worker threads (default: 10)
-* `--threads auto` — up to min(64, 2 × CPU); recommended for large lists
+* `--http-probe`
+* `--no-sni`
+* `--http-timeout N`
+* `--http-retries N`
+* `--http-max-ips N`
+* `--fp-file FILE`
+
+### Cloud Provider Matching
+
+* `--providers-file FILE`
+* `--add-cloud-marker REGEX`
+* `--cloud-asn N`
+* `--unknown-cloud-log FILE`
 
 ### Output & Display
 
-* `--color` — live red alerts while scanning
+* `--print {short, summary, both}`
+* `--quiet`
+* `--color`
+* `--logfile FILE`
+* `--json-compact`
 
-  * Strict: only strong evidence
-  * Loose: also suspicious provider suffixes
-* `--quiet` — hides progress bar (CI-friendly)
-* `--logfile FILE` — write progress messages to a file
+### Performance
+
+* `--threads N` or `auto`
 
 ---
 
 ## 📊 Classification
 
-* **OK** — DNS healthy
-* **VULNERABLE** —
+### Risk Levels
 
-  * Strict: NXDOMAIN + RDAP says not found (high confidence)
-  * Loose: also weaker signals (timeouts, empty NS, provider suffix suspects)
-* **BROKEN** — Delegation/config errors (SERVFAIL, empty NS with SOA)
-* **RETRY** — Resolver timeout
-* **ENV\_ERROR** — Local/system resolver issue
+* **OK** — healthy
+* **VULNERABLE** — confirmed risk
+* **BROKEN** — DNS misconfiguration
+* **RETRY** — temporary timeout
+* **ENV_ERROR** — local/system issue
+
+### Confidence Levels
+
+* **none** — no evidence
+* **low** — weak signals
+* **medium** — moderate signals
+* **high** — strong indicators
 
 ---
 
 ## 🚀 Examples
 
-### Baseline (fast, balanced)
+### Fast baseline
 
 ```bash
-python3 exhaunt.py \
-  --file subs.txt \
-  --threads auto \
-  --mode strict \
-  --rdap-mode fast \
-  --whois-delay 1.5 \
-  --quiet
+python3 exhaunt.py --file subs.txt --threads auto --mode strict --rdap-mode fast --quiet
 ```
 
-### Thorough audit (best accuracy)
+### Full audit
 
 ```bash
-python3 exhaunt.py \
-  --file subs.txt \
-  --threads auto \
-  --mode strict \
-  --rdap-mode polite \
-  --whois-delay 1.5 \
-  --quiet
+python3 exhaunt.py --file subs.txt --threads auto --mode strict --rdap-mode polite \
+--http-probe --http-timeout 6 --http-max-ips 3 --whois-max-ips 5 --color
 ```
 
-### Exploratory hunting (more suspects)
+### Exploration
 
 ```bash
-python3 exhaunt.py \
-  --file subs.txt \
-  --threads auto \
-  --mode loose \
-  --rdap-mode fast \
-  --whois-delay 1.0 \
-  --color
+python3 exhaunt.py --file subs.txt --mode loose --rdap-mode fast --http-probe --color
 ```
 
-### Direct subdomains
+### Single host
 
 ```bash
-python3 exhaunt.py \
-  --subs www.example.com api.example.com \
-  --mode strict \
-  --rdap-mode fast
+python3 exhaunt.py --subs target.example.com --mode strict --http-probe --no-sni --rdap-mode polite
 ```
 
-### CI-friendly
+### CI mode
 
 ```bash
-python3 exhaunt.py \
-  --file subs.txt \
-  --mode strict \
-  --rdap-mode fast \
-  --quiet \
-  --logfile run.log
+python3 exhaunt.py --file subs.txt --mode strict --json-compact --quiet --threads auto
 ```
 
 ---
 
 ## 🧠 Best Practices
 
-* For **10k+ subdomains**:
-
-  1. First pass: `--mode strict --rdap-mode fast --threads auto --quiet`
-  2. Re-run only `RETRY`/targeted TLDs with `--rdap-mode polite`
-
-* Increase `--whois-delay` to 2–3s if you see many WHOIS errors.
-
-* Use `--mode loose` to surface suspects; stick to `strict` for evidence-based tickets.
+* Use strict/fast for first passes on large inventories.
+* Re-run RETRY cases with polite mode.
+* Increase WHOIS delay if rate-limited.
+* Use http-probe for confirmation scans.
+* Loose mode for discovery; strict for reporting.
+* json-compact for pipelines.
 
 ---
 
 ## ❓ Troubleshooting
 
-**Lots of WHOIS errors**
-That’s normal under load (registries rate-limit). ExHaunt bases risk on DNS + RDAP; WHOIS is just ownership context.
-
-**Slow on huge lists**
-Use `--threads auto` and `--rdap-mode fast`, then re-run inconclusives with `--rdap-mode polite`.
-
-**“Suspicious provider suffix (haunted)”**
-Loose mode hint: terminal CNAME points at known providers. Treat as a lead, not proof.
+* WHOIS errors are common and do not impact risk classification.
+* DNS timeouts may require network tuning or fallback resolvers.
+* Progress bar stays pinned; use --quiet for CI.
+* Provider suffix hints are indicators, not confirmations.
 
 ---
 
 ## 📜 License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+Licensed under MIT. See `LICENSE`.
 
 ---
 
 ## 🙏 Attribution
 
-ExHaunt 👻 is developed and maintained by **[a9hora](https://github.com/a9hora)**.  
-
-If you use ExHaunt in research, products, company workflows, or publications, please provide clear attribution to the project and its author.
+ExHaunt 👻 maintained by **a9hora**.
+Please attribute appropriately in reports or publications.
