@@ -5,7 +5,7 @@
 ExHaunt helps you identify **risky, abandoned, or misconfigured subdomains** before attackers take advantage of them.
 It sorts each subdomain into clear categories — `OK`, `VULNERABLE`, `BROKEN`, `RETRY`, `ENV_ERROR` — and assigns a **confidence level** so you understand which findings truly matter.
 
-> Built & maintained by **A9HORA**
+> Built & maintained by **[A9HORA](https://x.com/A9HORA)**
 
 ---
 
