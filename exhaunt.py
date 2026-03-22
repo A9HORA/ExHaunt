@@ -85,8 +85,12 @@ def _flatten_row(r: dict) -> dict:
         "service_network": ipw.get("network_name") or "",
         "service_asn": ipw.get("asn") or "",
         "service_asn_desc": ipw.get("asn_description") or "",
-        "takeover_type": r.get("takeover_type") or "",
-        "takeover_confidence": (r.get("takeover_confidence") or ""),
+        # FIX 2: preserve "UNKNOWN" and "none" as explicit strings.
+        # `or ""` previously coerced "UNKNOWN"/"none" strings truthfully (non-empty
+        # strings are truthy so this was fine), BUT if analyze() ever returned None
+        # the column silently blanked. Use explicit None-guard instead of or "".
+        "takeover_type": r.get("takeover_type") if r.get("takeover_type") is not None else "",
+        "takeover_confidence": r.get("takeover_confidence") if r.get("takeover_confidence") is not None else "",
         "http_fingerprint": _fmt_fp(r.get("http_fingerprints") or []),
         "tcp_80": tcp80,
         "tcp_443": tcp443,
@@ -121,21 +125,39 @@ def _prune_empty(obj):
 def _compact_result(r: dict) -> dict:
     """
     Keep decision-critical fields; drop heavy debug payloads & duplicates.
-    NOTE: tcp_states is preserved in compact JSON.
+    tcp_states is always preserved even when http_probe is absent.
+    http_probe fingerprints + confidence are preserved; per_ip blobs are dropped.
     """
     r2 = deepcopy(r)
 
-    # dns_provider
+    # FIX 4: stash tcp_states and fingerprint summary BEFORE _prune_empty runs.
+    # _prune_empty drops empty dicts/lists recursively. When --http-probe is off,
+    # http_probe is None (pruned fine) but tcp_states port values may be empty
+    # strings which survive — however if all IPs are missing the dict collapses.
+    # Explicit stash + re-attach guarantees both fields always survive compaction.
+    saved_tcp = r2.get("tcp_states")  # may be dict or None
+
+    # http_probe: keep fingerprints + confidence, drop per_ip blobs
+    hp = r2.get("http_probe")
+    saved_fp_summary = None
+    if isinstance(hp, dict):
+        saved_fp_summary = {
+            "fingerprints": hp.get("fingerprints") or [],
+            "confidence": hp.get("confidence") or "none",
+        }
+        hp.pop("per_ip", None)
+
+    # dns_provider: drop transient dns_error (noise in compact mode)
     dp = r2.get("dns_provider")
     if isinstance(dp, dict):
         dp.pop("dns_error", None)
 
-    # domain_owner
+    # domain_owner: drop raw TLS cert blob
     dom = r2.get("domain_owner")
     if isinstance(dom, dict):
         dom.pop("tls_cert", None)
 
-    # service_provider
+    # service_provider: strip raw IPWhois blob and RDAP detail
     sp = r2.get("service_provider")
     if isinstance(sp, dict):
         ipw = sp.get("ip_whois")
@@ -149,16 +171,24 @@ def _compact_result(r: dict) -> dict:
             sp["ip_whois"] = compact_ipw
         sp.pop("rdap", None)
 
-    # http_probe: keep fingerprints + confidence, drop per_ip blobs
-    hp = r2.get("http_probe")
-    if isinstance(hp, dict):
-        hp.pop("per_ip", None)
-
-    # Preserve tcp_states
-    # Duplicates: keep http_probe.fingerprints; drop separate http_fingerprints
+    # http_fingerprints top-level key is redundant with http_probe.fingerprints
     r2.pop("http_fingerprints", None)
 
-    return _prune_empty(r2)
+    # Prune empty values from the whole structure
+    r2 = _prune_empty(r2)
+
+    # Re-attach preserved fields (overwrite whatever _prune_empty left)
+    if saved_tcp is not None:
+        r2["tcp_states"] = saved_tcp
+    if saved_fp_summary is not None:
+        # Merge back into http_probe if it survived, else create minimal node
+        if isinstance(r2.get("http_probe"), dict):
+            r2["http_probe"].update(saved_fp_summary)
+        elif saved_fp_summary["fingerprints"]:
+            # http_probe was None/pruned but we do have fingerprint data — keep it
+            r2["http_probe"] = saved_fp_summary
+
+    return r2
 
 # ---------------------------------------------------------
 
@@ -317,7 +347,9 @@ def main():
         "subdomain","cname","hostname_ips","status","takeover_risk","owner_registrar","owner_org",
         "dns_provider","dns_error","service_cname","service_cname_chain",
         "service_ips","service_country","service_network","service_asn","service_asn_desc",
-        "takeover_type","takeover_confidence","http_fp","tcp_80","tcp_443"
+        "takeover_type","takeover_confidence","http_fingerprint","tcp_80","tcp_443"
+        # FIX 1: was "http_fp" — key name mismatched _flatten_row which emits "http_fingerprint";
+        # the column was silently blank in every CSV output.
     ]
     write_csv(flat_rows, f"{output_prefix}.csv", fieldnames)
 
