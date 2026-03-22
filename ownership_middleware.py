@@ -72,10 +72,6 @@ _NET_SEM = threading.BoundedSemaphore(value=int(os.environ.get("NET_CONCURRENCY"
 # DNS resolver helpers (system-first, public fallback)
 # =============================
 def _make_resolver(timeout: float = 3.0, lifetime: float = 5.0, nameservers: Optional[List[str]] = None) -> dns.resolver.Resolver:
-    """
-    Build a resolver. If nameservers is None -> use system resolver; otherwise set explicit servers.
-    Timeouts/lifetime can be overridden by env: DNS_TIMEOUT / DNS_LIFETIME
-    """
     r = dns.resolver.Resolver(configure=(nameservers is None))
     if nameservers:
         r.nameservers = nameservers
@@ -84,25 +80,18 @@ def _make_resolver(timeout: float = 3.0, lifetime: float = 5.0, nameservers: Opt
     return r
 
 _RESOLVER_POOLS: List[List[str]] = [
-    ["8.8.8.8", "8.8.4.4"],           # Google
-    ["1.1.1.1", "1.0.0.1"],           # Cloudflare
-    ["9.9.9.9", "149.112.112.112"],   # Quad9
+    ["8.8.8.8", "8.8.4.4"],
+    ["1.1.1.1", "1.0.0.1"],
+    ["9.9.9.9", "149.112.112.112"],
 ]
 
 def _resolve_with_multi_fallback(name: str, rtype: str, attempts: int = 2, raise_on_no_answer: bool = False):
-    """
-    Resolution strategy:
-      1) Try system resolver once.
-      2) Fall back across public resolver pools, light retries per pool.
-    """
     last_exc = None
-    # System resolver first
     try:
         with _NET_SEM:
             return _make_resolver().resolve(name, rtype, raise_on_no_answer=raise_on_no_answer)
     except Exception as e:
         last_exc = e
-    # Public pools
     for pool in _RESOLVER_POOLS:
         for _ in range(max(1, int(attempts))):
             try:
@@ -125,7 +114,7 @@ def _registrable_domain(host: str) -> str:
 # IPWhois cache
 # =============================
 _IPWHOIS_CACHE: dict = {}
-_IPWHOIS_TTL_SEC: int = 4 * 60 * 60  # 4 hours
+_IPWHOIS_TTL_SEC: int = 4 * 60 * 60
 
 def _ipwhois_lookup(ip: str) -> Optional[dict]:
     now = time.time()
@@ -221,7 +210,7 @@ def _rdap_base_urls_for_suffix(suffix: str) -> list:
     return []
 
 _RDAP_CACHE: dict = {}
-_RDAP_TTL_SEC: int = int(os.environ.get("RDAP_TTL_SEC", str(4 * 60 * 60)))  # 4 hours default
+_RDAP_TTL_SEC: int = int(os.environ.get("RDAP_TTL_SEC", str(4 * 60 * 60)))
 
 def _rdap_cache_get(key: str):
     rec = _RDAP_CACHE.get(key)
@@ -307,16 +296,8 @@ PROVIDER_SUFFIXES = [
 # Provider taxonomy (ASNs + regex) — YAML-first with warning fallback
 # =============================
 def _load_providers(providers_path: Optional[str]) -> dict:
-    """
-    providers.yaml (authoritative):
-      asns: [15169, 16509, ...]         # integers
-      patterns:                         # regex strings (case-insensitive)
-        - "google|google[-\\s]?cloud|gcp"
-        - "amazon|aws|amazon[-\\s]?technologies"
-        - ...
-    """
     minimal_fallback = {
-        "asns": [15169, 16509, 8075, 13335],  # Google, Amazon, Microsoft, Cloudflare
+        "asns": [15169, 16509, 8075, 13335],
         "patterns": [r"google|gcp", r"amazon|aws", r"microsoft|azure", r"cloudflare"]
     }
 
@@ -606,9 +587,6 @@ def _grade_takeover_confidence(takeover_type: str,
                                http_probe: Optional[dict],
                                tcp_states: Optional[dict],
                                mode: str) -> str:
-    """
-    Map signals -> takeover_confidence: none|low|medium|high
-    """
     if not takeover_type or takeover_type == "UNKNOWN":
         return "none"
 
@@ -653,20 +631,16 @@ class OwnershipMiddleware:
         whois_delay: float = 1.0,
         mode: str = "strict",
         rdap_mode: str = "fast",
-        # HTTP/TLS probe & fingerprints
         http_probe_enabled: bool = False,
         http_timeout: float = 3.0,
         http_retries: int = 1,
         http_max_ips: int = 2,
         no_sni: bool = False,
         fp_file: Optional[str] = None,
-        # Provider taxonomy
         providers_file: Optional[str] = None,
         add_cloud_markers: Optional[List[str]] = None,
         extra_cloud_asns: Optional[List[int]] = None,
-        # Unknown ASN logging
         unknown_cloud_log: Optional[str] = None,
-        # RDAP/WHOIS sampling control for IP whois (propagated from exhaunt.py; backward compatible)
         whois_max_ips: int = 1,
     ):
         self.whois_delay = whois_delay
@@ -686,17 +660,15 @@ class OwnershipMiddleware:
             base.update([int(a) for a in extra_cloud_asns if str(a).isdigit()])
             self._providers_cfg["asns"] = sorted(base)
 
-        self._unknown_log_path = unknown_cloud_log or os.environ.get("EXHAUNT_UNKNOWN_ASN_LOG")  # None means disabled
+        self._unknown_log_path = unknown_cloud_log or os.environ.get("EXHAUNT_UNKNOWN_ASN_LOG")
         self._unknown_log_lock = threading.Lock()
         self._unknown_seen: set = set()
 
         self._whois_lock = threading.Lock()
         self._whois_last = 0.0
 
-        # how many IPs to sample for IPWhois (first N)
         self._whois_max_ips = max(1, int(whois_max_ips))
 
-    # DNS provider (unchanged except resolver fallback)
     def get_dns_provider(self, domain: str) -> Dict:
         base = _registrable_domain(domain)
         result = {"ns": [], "dns_error": None, "classification": classify(Risk.OK, "NS present", {})}
@@ -779,7 +751,6 @@ class OwnershipMiddleware:
         svc["ips"] = ips
         svc["loose_match_provider"] = any(terminal.lower().endswith(suf) for suf in PROVIDER_SUFFIXES)
 
-        # IPWhois sampling (first N IPs)
         if ips and IPWhois is not None:
             info_primary = None
             for ip in ips[: self._whois_max_ips]:
@@ -792,7 +763,7 @@ class OwnershipMiddleware:
                     "asn_description": info_primary.get("asn_description"),
                     "asn_country_code": info_primary.get("asn_country_code"),
                     "network_name": (info_primary.get("network") or {}).get("name"),
-                    "raw": info_primary,  # keep raw for deeper analysis if needed
+                    "raw": info_primary,
                 }
 
         term_reg = _registrable_domain(terminal)
@@ -819,7 +790,7 @@ class OwnershipMiddleware:
                         fh.write(line)
                 self._unknown_seen.add(key)
         except Exception:
-            pass  # logging is best-effort only
+            pass
 
     def analyze(self, hostname: str) -> dict:
         ext = tldextract.extract(hostname)
@@ -828,12 +799,10 @@ class OwnershipMiddleware:
         domain_owner = self.get_domain_owner(base_domain)
         service_provider = self.get_service_provider(hostname)
 
-        # Provider/cloud classification
         ipw_raw = (service_provider.get("ip_whois") or {}).get("raw") or (service_provider.get("ip_whois") or {})
         is_cloud = _is_cloud_provider(ipw_raw, self._providers_cfg) if ipw_raw else False
         takeover_type = "UNKNOWN"
 
-        # Optional HTTP/TLS probe (enabled via CLI)
         http_probe = None
         fp_conf = "none"
         fp_names: List[str] = []
@@ -849,19 +818,15 @@ class OwnershipMiddleware:
             fp_names = http_probe.get("fingerprints") or []
             fp_conf = http_probe.get("confidence") or "none"
 
-        # TCP states for first N IPs (always collected silently for CSV/JSON)
         tcp_states = _tcp_states_for_ips(service_provider.get("ips") or [], self.http_max_ips, self.http_timeout)
 
-        # Base risk from DNS phase
         risk = dns_provider.get("classification", {}).get("risk", "OK")
         reason = dns_provider.get("classification", {}).get("reason", "NS present")
 
-        # Loose-mode heuristic (existing)
         loose_vuln = False
         if self.mode == "loose" and service_provider.get("loose_match_provider"):
             loose_vuln = True
 
-        # Candidate / Confirmed classification
         if is_cloud and (service_provider.get("cname_chain") == []):
             takeover_type = "A_CLOUD_REUSE_CANDIDATE"
             if fp_conf == "strong":
@@ -869,14 +834,18 @@ class OwnershipMiddleware:
                 risk = Risk.VULNERABLE.value
                 reason = "A-record to cloud IP with default/unbound backend (confirmed by fingerprints)"
             elif self.mode == "loose" and fp_conf in ("weak", "medium"):
+                # FIX 3: previously only set loose_vuln=True here, leaving risk="OK"
+                # in dns_provider.classification while the console printed VULNERABLE.
+                # JSON, CSV, and console are now consistent: all show VULNERABLE.
                 loose_vuln = True
+                risk = Risk.VULNERABLE.value
+                reason = "A-record to cloud IP with unbound backend signal (loose mode)"
         else:
             if (service_provider.get("cname_chain") == []) and _looks_cloudy_but_unknown(ipw_raw, http_probe):
                 self._log_unknown_cloud(hostname, service_provider.get("ips") or [], ipw_raw)
 
         hostname_ips = _resolve_ips(hostname)
 
-        # Takeover confidence (new)
         takeover_confidence = _grade_takeover_confidence(
             takeover_type=takeover_type,
             http_probe=http_probe,
@@ -892,7 +861,7 @@ class OwnershipMiddleware:
             "domain_owner": domain_owner,
             "service_provider": service_provider,
             "http_probe": http_probe,
-            "tcp_states": tcp_states,                # kept out of console; used in CSV/JSON
+            "tcp_states": tcp_states,
             "takeover_type": takeover_type,
             "takeover_confidence": takeover_confidence,
             "http_fingerprints": fp_names,
