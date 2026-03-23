@@ -1,5 +1,28 @@
 # ExHaunt HTTP/TLS fingerprints for default/unbound backends
 # Confidence levels: strong | medium | weak
+#
+# Schema per rule:
+#   name        — unique identifier, shown in output
+#   provider    — display name for the service
+#   cname_suffix — (optional) terminal CNAME must end with this to match rule
+#   status      — list of HTTP status codes to match (string, supports regex)
+#   header      — list of "header-name: regex" pairs (all must match)
+#   body        — list of body regex patterns (all must match)
+#   tls_subject — regex matched against TLS cert subject string
+#   tls_issuer  — regex matched against TLS cert issuer string
+#   confidence  — strong | medium | weak
+#   vulnerable  — true = confirmed takeover possible, false = not claimable
+#                 (false rules still fire for context but won't promote to CONFIRMED)
+#
+# Sources: EdOverflow/can-i-take-over-xyz (fingerprints.json), verified 2025.
+# Only "Vulnerable: true" entries are marked vulnerable: true here.
+# "Not vulnerable" services included for identification context only.
+# ======================================================================
+
+
+# ======================================================================
+# AWS
+# ======================================================================
 
 - name: aws-alb-default
   provider: AWS
@@ -7,20 +30,116 @@
   header:
     - "server: ^awselb/2\\.0$"
   confidence: strong
+  vulnerable: false
+
+- name: aws-s3-no-bucket
+  provider: AWS/S3
+  cname_suffix: ".s3.amazonaws.com"
+  status: [ "404" ]
+  body:
+    - "The specified bucket does not exist"
+  confidence: strong
+  vulnerable: true
+
+- name: aws-s3-no-bucket-xml
+  provider: AWS/S3
+  body:
+    - "<Code>NoSuchBucket</Code>"
+  confidence: strong
+  vulnerable: true
+
+- name: aws-elastic-beanstalk-nxdomain
+  provider: AWS/Elastic Beanstalk
+  cname_suffix: ".elasticbeanstalk.com"
+  status: [ "404" ]
+  body:
+    - "404 Not Found"
+  confidence: medium
+  vulnerable: true
+
+- name: aws-cloudfront-viewer-cert
+  provider: AWS/CloudFront
+  body:
+    - "ViewerCertificateException"
+  confidence: medium
+  vulnerable: false
+
+
+# ======================================================================
+# Google Cloud Platform
+# ======================================================================
 
 - name: gcp-https-lb-default
   provider: GCP
   status: [ "404", "502" ]
   header:
-    - "server: ^google frontend$|^gfe|^x-envoy"
+    - "server: ^(google frontend|gfe|x-envoy)"
   confidence: strong
+  vulnerable: false
+
+- name: gcp-storage-no-bucket
+  provider: GCP/Storage
+  cname_suffix: ".storage.googleapis.com"
+  status: [ "404" ]
+  body:
+    - "The specified bucket does not exist|NoSuchBucket|BucketNotFound"
+  confidence: strong
+  vulnerable: true
+
+- name: gcp-app-engine-404
+  provider: GCP/App Engine
+  status: [ "404" ]
+  header:
+    - "x-cloud-trace-context: .+"
+  body:
+    - "The requested URL was not found on this server\\. That.s all we know\\."
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Azure
+# ======================================================================
 
 - name: azure-frontdoor-default
-  provider: Azure
+  provider: Azure/Front Door
   status: [ "400", "404" ]
   header:
     - "x-azure-ref: .+"
   confidence: medium
+  vulnerable: false
+
+- name: azure-websites-no-site
+  provider: Azure/App Service
+  cname_suffix: ".azurewebsites.net"
+  status: [ "404" ]
+  body:
+    - "404 Web Site not found|Error 404 - Web app not found|The resource you are looking for has been removed"
+  confidence: strong
+  vulnerable: true
+
+- name: azure-traffic-manager
+  provider: Azure/Traffic Manager
+  cname_suffix: ".trafficmanager.net"
+  status: [ "404" ]
+  body:
+    - "No web app is configured|404 Not Found"
+  confidence: medium
+  vulnerable: false
+
+- name: azure-blob-no-container
+  provider: Azure/Blob Storage
+  cname_suffix: ".blob.core.windows.net"
+  status: [ "404" ]
+  body:
+    - "BlobNotFound|The specified blob does not exist|ResourceNotFound"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Fastly
+# ======================================================================
 
 - name: fastly-unknown-domain
   provider: Fastly
@@ -28,6 +147,12 @@
   body:
     - "Fastly error: unknown domain"
   confidence: strong
+  vulnerable: false
+
+
+# ======================================================================
+# Cloudflare
+# ======================================================================
 
 - name: cloudflare-origin-dns-error
   provider: Cloudflare
@@ -35,3 +160,439 @@
   body:
     - "Error\\s*1016"
   confidence: medium
+  vulnerable: false
+
+- name: cloudflare-1001
+  provider: Cloudflare
+  status: [ "530" ]
+  body:
+    - "Error\\s*1001"
+  confidence: medium
+  vulnerable: false
+
+
+# ======================================================================
+# Heroku
+# ======================================================================
+
+- name: heroku-no-such-app
+  provider: Heroku
+  cname_suffix: ".herokuapp.com"
+  status: [ "404" ]
+  body:
+    - "No such app|Heroku.*no such app|There's nothing here, yet"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# GitHub Pages
+# ======================================================================
+
+- name: github-pages-no-site
+  provider: GitHub Pages
+  cname_suffix: ".github.io"
+  status: [ "404" ]
+  body:
+    - "There isn't a GitHub Pages site here\\.|If you're trying to publish one"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Netlify
+# ======================================================================
+
+- name: netlify-not-found
+  provider: Netlify
+  cname_suffix: ".netlify.app"
+  status: [ "404" ]
+  body:
+    - "Not Found - Request ID|Page Not Found|netlify"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Vercel
+# ======================================================================
+
+- name: vercel-deployment-not-found
+  provider: Vercel
+  cname_suffix: ".vercel.app"
+  status: [ "404" ]
+  body:
+    - "The deployment could not be found|This Vercel deployment does not exist"
+  confidence: strong
+  vulnerable: true
+
+- name: vercel-domain-not-configured
+  provider: Vercel
+  status: [ "404" ]
+  body:
+    - "The page you are looking for doesn't exist or has been moved\\."
+  header:
+    - "x-vercel-id: .+"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Shopify
+# ======================================================================
+
+- name: shopify-store-unavailable
+  provider: Shopify
+  status: [ "404" ]
+  body:
+    - "Sorry, this shop is currently unavailable\\."
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Ghost
+# ======================================================================
+
+- name: ghost-site-unavailable
+  provider: Ghost
+  cname_suffix: ".ghost.io"
+  status: [ "404" ]
+  body:
+    - "Site unavailable|Failed to resolve DNS path for this host"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Tumblr
+# ======================================================================
+
+- name: tumblr-not-found
+  provider: Tumblr
+  status: [ "404" ]
+  body:
+    - "Whatever you were looking for doesn't currently exist at this address"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# WordPress.com
+# ======================================================================
+
+- name: wordpress-no-site
+  provider: WordPress.com
+  status: [ "404" ]
+  body:
+    - "Do you want to register|doesn't exist|wordpress\\.com/typo"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Zendesk
+# ======================================================================
+
+- name: zendesk-help-center-closed
+  provider: Zendesk
+  status: [ "404" ]
+  body:
+    - "Help Center Closed|This help center no longer exists"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Freshdesk
+# ======================================================================
+
+- name: freshdesk-not-found
+  provider: Freshdesk
+  status: [ "404" ]
+  body:
+    - "We couldn't find servicedesk|Maybe this is still fresh"
+  confidence: medium
+  vulnerable: false
+
+
+# ======================================================================
+# HubSpot
+# ======================================================================
+
+- name: hubspot-no-page
+  provider: HubSpot
+  status: [ "404" ]
+  body:
+    - "This page isn't available|Domain not configured|does not exist in our system"
+  header:
+    - "x-hubspot-no-cache: .+"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Intercom
+# ======================================================================
+
+- name: intercom-not-found
+  provider: Intercom
+  status: [ "404" ]
+  body:
+    - "Uh oh\\. That page doesn't exist|This page is reserved for an Intercom"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Bitbucket
+# ======================================================================
+
+- name: bitbucket-repo-not-found
+  provider: Bitbucket
+  cname_suffix: ".bitbucket.io"
+  status: [ "404" ]
+  body:
+    - "Repository not found"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Cargo Collective
+# ======================================================================
+
+- name: cargo-not-found
+  provider: Cargo Collective
+  status: [ "404" ]
+  body:
+    - "404 Not Found"
+  header:
+    - "server: ^cargo"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Surge.sh
+# ======================================================================
+
+- name: surge-not-found
+  provider: Surge.sh
+  cname_suffix: ".surge.sh"
+  status: [ "404" ]
+  body:
+    - "project not found"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Readme.io
+# ======================================================================
+
+- name: readmeio-not-found
+  provider: Readme.io
+  status: [ "404" ]
+  body:
+    - "We couldn't find what you're looking for|readme\\.io"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Pantheon
+# ======================================================================
+
+- name: pantheon-not-found
+  provider: Pantheon
+  status: [ "404" ]
+  body:
+    - "The gods are wise|a Pantheon website"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Fastly / Pantheon overlap
+# ======================================================================
+
+- name: wpengine-not-found
+  provider: WP Engine
+  status: [ "404" ]
+  body:
+    - "The site you were looking for couldn't be found|no-site-found"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# UserVoice
+# ======================================================================
+
+- name: uservoice-not-found
+  provider: UserVoice
+  status: [ "404" ]
+  body:
+    - "This UserVoice subdomain is currently available"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Helpjuice
+# ======================================================================
+
+- name: helpjuice-not-found
+  provider: Helpjuice
+  status: [ "404" ]
+  body:
+    - "We could not find what you're looking for\\."
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# LaunchRock
+# ======================================================================
+
+- name: launchrock-not-found
+  provider: LaunchRock
+  status: [ "404" ]
+  body:
+    - "It looks like you may have taken a wrong turn"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Gemfury
+# ======================================================================
+
+- name: gemfury-not-found
+  provider: Gemfury
+  cname_suffix: ".furyns.com"
+  status: [ "404" ]
+  body:
+    - "404: This page could not be found\\."
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Uberflip
+# ======================================================================
+
+- name: uberflip-no-hub
+  provider: Uberflip
+  status: [ "404" ]
+  body:
+    - "The URL you've accessed does not provide a hub"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Pingdom
+# ======================================================================
+
+- name: pingdom-no-page
+  provider: Pingdom
+  status: [ "404" ]
+  body:
+    - "Sorry, couldn't find the status page"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Canny
+# ======================================================================
+
+- name: canny-not-found
+  provider: Canny
+  status: [ "404" ]
+  body:
+    - "There is no such company\\. Did you enter the right URL"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Campaign Monitor
+# ======================================================================
+
+- name: campaignmonitor-not-found
+  provider: Campaign Monitor
+  status: [ "404" ]
+  body:
+    - "Trying to access your account\\?"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Digital Ocean Spaces / App Platform
+# ======================================================================
+
+- name: digitalocean-no-records
+  provider: Digital Ocean
+  status: [ "404" ]
+  body:
+    - "Domain uses DO name servers with no records in DO"
+  confidence: strong
+  vulnerable: true
+
+
+# ======================================================================
+# Discourse
+# ======================================================================
+
+- name: discourse-nxdomain
+  provider: Discourse
+  cname_suffix: ".trydiscourse.com"
+  status: [ "404" ]
+  body:
+    - "The page you were looking for doesn't exist"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Agile CRM
+# ======================================================================
+
+- name: agilecrm-not-found
+  provider: Agile CRM
+  cname_suffix: ".agilecrm.com"
+  status: [ "404" ]
+  body:
+    - "Sorry, this page is no longer available\\."
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Getresponse
+# ======================================================================
+
+- name: getresponse-not-found
+  provider: Getresponse
+  status: [ "404" ]
+  body:
+    - "With GetResponse Landing Pages, lead generation has never been easier"
+  confidence: medium
+  vulnerable: true
+
+
+# ======================================================================
+# Mailchimp
+# ======================================================================
+
+- name: mailchimp-not-found
+  provider: Mailchimp
+  status: [ "404" ]
+  body:
+    - "We can't find that page|It looks like you're trying to reach a page that was built by Mailchimp but is no longer active"
+  confidence: medium
+  vulnerable: true
