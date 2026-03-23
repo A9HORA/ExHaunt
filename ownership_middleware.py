@@ -27,13 +27,11 @@ except Exception:
     IPWhois = None
 
 try:
-    import yaml  # for fingerprints/providers
+    import yaml
 except Exception:
     yaml = None
 
-# ---------- Color-aware warning helper ----------
 def _warn(msg: str):
-    """Print a warning; colorized if EXHAUNT_COLOR=1 and stderr is a TTY."""
     use_color = os.environ.get("EXHAUNT_COLOR") == "1" and sys.stderr.isatty()
     if use_color:
         sys.stderr.write("\x1b[33m[WARNING]\x1b[0m " + msg + "\n")
@@ -43,11 +41,7 @@ def _warn(msg: str):
         sys.stderr.flush()
     except Exception:
         pass
-# ------------------------------------------------
 
-# =============================
-# Risk classification
-# =============================
 class Risk(Enum):
     OK = "OK"
     BROKEN = "BROKEN"
@@ -56,21 +50,10 @@ class Risk(Enum):
     ENV_ERROR = "ENV_ERROR"
 
 def classify(risk: Risk, reason: str, evidence: Optional[dict] = None, confidence: str = "LOW") -> dict:
-    return {
-        "risk": risk.value,
-        "reason": reason,
-        "confidence": confidence,
-        "evidence": evidence or {},
-    }
+    return {"risk": risk.value, "reason": reason, "confidence": confidence, "evidence": evidence or {}}
 
-# =============================
-# Global concurrency guard
-# =============================
 _NET_SEM = threading.BoundedSemaphore(value=int(os.environ.get("NET_CONCURRENCY", "128")))
 
-# =============================
-# DNS resolver helpers (system-first, public fallback)
-# =============================
 def _make_resolver(timeout: float = 3.0, lifetime: float = 5.0, nameservers: Optional[List[str]] = None) -> dns.resolver.Resolver:
     r = dns.resolver.Resolver(configure=(nameservers is None))
     if nameservers:
@@ -90,6 +73,8 @@ def _resolve_with_multi_fallback(name: str, rtype: str, attempts: int = 2, raise
     try:
         with _NET_SEM:
             return _make_resolver().resolve(name, rtype, raise_on_no_answer=raise_on_no_answer)
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        raise
     except Exception as e:
         last_exc = e
     for pool in _RESOLVER_POOLS:
@@ -97,6 +82,8 @@ def _resolve_with_multi_fallback(name: str, rtype: str, attempts: int = 2, raise
             try:
                 with _NET_SEM:
                     return _make_resolver(nameservers=pool).resolve(name, rtype, raise_on_no_answer=raise_on_no_answer)
+            except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+                raise
             except Exception as e:
                 last_exc = e
                 continue
@@ -110,11 +97,31 @@ def _registrable_domain(host: str) -> str:
         return host
     return f"{ext.domain}.{ext.suffix}"
 
-# =============================
-# IPWhois cache
-# =============================
 _IPWHOIS_CACHE: dict = {}
 _IPWHOIS_TTL_SEC: int = 4 * 60 * 60
+
+import io as _io
+
+def _suppress_stderr():
+    class _CM:
+        def __enter__(self):
+            self._real = sys.stderr
+            sys.stderr = _io.StringIO()
+        def __exit__(self, *_):
+            sys.stderr = self._real
+    return _CM()
+
+if IPWhois is not None:
+    try:
+        with _suppress_stderr():
+            _warmup = IPWhois("192.0.2.1")
+            try:
+                _warmup.lookup_rdap(depth=0)
+            except Exception:
+                pass
+            del _warmup
+    except Exception:
+        pass
 
 def _ipwhois_lookup(ip: str) -> Optional[dict]:
     now = time.time()
@@ -124,16 +131,14 @@ def _ipwhois_lookup(ip: str) -> Optional[dict]:
     if IPWhois is None:
         return None
     try:
-        with _NET_SEM:
-            data = IPWhois(ip).lookup_rdap(depth=1)
+        with _suppress_stderr():
+            with _NET_SEM:
+                data = IPWhois(ip).lookup_rdap(depth=1)
         _IPWHOIS_CACHE[ip] = {"ts": now, "data": data}
         return data
     except Exception:
         return None
 
-# =============================
-# TLS certificate org extractor
-# =============================
 def _get_cert_org(hostname: str, port: int = 443, timeout: float = 5.0) -> Optional[dict]:
     try:
         ctx = ssl.create_default_context()
@@ -142,15 +147,10 @@ def _get_cert_org(hostname: str, port: int = 443, timeout: float = 5.0) -> Optio
                 with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
                     der = ssock.getpeercert(binary_form=True)
         cert = x509.load_der_x509_certificate(der, default_backend())
-        subject = cert.subject.rfc4514_string()
-        issuer = cert.issuer.rfc4514_string()
-        return {"subject": subject, "issuer": issuer}
+        return {"subject": cert.subject.rfc4514_string(), "issuer": cert.issuer.rfc4514_string()}
     except Exception:
         return None
 
-# =============================
-# CNAME chain / IPs
-# =============================
 def _resolve_cname_chain(hostname: str, max_hops: int = 10) -> List[str]:
     chain: List[str] = []
     current = hostname.rstrip(".")
@@ -182,9 +182,6 @@ def _resolve_ips(name: str) -> List[str]:
         pass
     return ips
 
-# =============================
-# RDAP helpers (+ 4h cache)
-# =============================
 _RDAP_BOOTSTRAP_URL = os.environ.get("RDAP_BOOTSTRAP_URL", "https://data.iana.org/rdap/dns.json")
 _RDAP_HTTP_TIMEOUT = float(os.environ.get("RDAP_TIMEOUT", "5.0"))
 
@@ -229,7 +226,6 @@ def _rdap_query_domain(domain: str, mode: str = "fast") -> dict:
     cached = _rdap_cache_get(cache_key)
     if cached is not None:
         return cached
-
     ext = tldextract.extract(domain)
     suffix = ext.suffix
     if not suffix:
@@ -241,7 +237,6 @@ def _rdap_query_domain(domain: str, mode: str = "fast") -> dict:
         data = {"error": f"no rdap urls for suffix {suffix}"}
         _rdap_cache_put(cache_key, data)
         return data
-
     for base in urls:
         base = base.rstrip("/")
         url = f"{base}/domain/{domain}"
@@ -278,32 +273,20 @@ def _rdap_query_domain(domain: str, mode: str = "fast") -> dict:
                 data = {"error": str(e)}
                 _rdap_cache_put(cache_key, data)
                 return data
-
     data = {"error": "rdap query failed"}
     _rdap_cache_put(cache_key, data)
     return data
 
-# =============================
-# Provider suffix heuristics (existing)
-# =============================
 PROVIDER_SUFFIXES = [
     ".github.io", ".githubusercontent.com", ".herokuapp.com", ".netlify.app",
     ".vercel.app", ".cloudfront.net", ".s3.amazonaws.com", ".s3-website", ".azurewebsites.net",
     ".trafficmanager.net", ".blob.core.windows.net", ".storage.googleapis.com"
 ]
 
-# =============================
-# Provider taxonomy (ASNs + regex) — YAML-first with warning fallback
-# =============================
 def _load_providers(providers_path: Optional[str]) -> dict:
-    minimal_fallback = {
-        "asns": [15169, 16509, 8075, 13335],
-        "patterns": [r"google|gcp", r"amazon|aws", r"microsoft|azure", r"cloudflare"]
-    }
-
+    minimal_fallback = {"asns": [15169, 16509, 8075, 13335], "patterns": [r"google|gcp", r"amazon|aws", r"microsoft|azure", r"cloudflare"]}
     env_path = os.environ.get("EXHAUNT_PROVIDERS_FILE")
     candidates = [providers_path, env_path]
-
     for p in [x for x in candidates if x]:
         if yaml is None:
             _warn("PyYAML not installed; falling back to minimal provider list.")
@@ -323,7 +306,6 @@ def _load_providers(providers_path: Optional[str]) -> dict:
                 return minimal_fallback
         else:
             _warn(f"Providers file not found at {p}; will try defaults.")
-
     default_path = os.path.join(os.path.dirname(__file__), "providers.yaml")
     if yaml is not None and os.path.isfile(default_path):
         try:
@@ -338,7 +320,6 @@ def _load_providers(providers_path: Optional[str]) -> dict:
         except Exception as e:
             _warn(f"Failed to read default providers.yaml: {e}; using minimal provider list.")
             return minimal_fallback
-
     _warn("providers.yaml not found; using minimal provider list. Coverage may be incomplete.")
     return minimal_fallback
 
@@ -353,15 +334,12 @@ def _is_cloud_provider(ipwhois_obj: Optional[dict], providers_cfg: dict) -> bool
         asn_int = int(asn) if asn and str(asn).isdigit() else None
     except Exception:
         asn_int = None
-
     if asn_int and asn_int in set(providers_cfg.get("asns", [])):
         return True
-
     patt = "|".join(providers_cfg.get("patterns", [])) or ""
     if not patt:
         return False
     rx = re.compile(patt, re.I)
-
     asn_desc = _normalize_str(ipwhois_obj.get("asn_description"))
     net_name = _normalize_str((ipwhois_obj.get("network") or {}).get("name"))
     org_name = ""
@@ -375,22 +353,15 @@ def _is_cloud_provider(ipwhois_obj: Optional[dict], providers_cfg: dict) -> bool
         org_name = " ".join([p for p in parts if p])
     except Exception:
         org_name = ""
-
     text = " | ".join([asn_desc, net_name, org_name])
     return bool(rx.search(text))
 
-_GENERIC_CLOUDY_RX = re.compile(
-    r"\b(cloud|hosting|datacenter|data\s*center|edge|cdn|compute|virtual|vps|infra|infrastructure)\b",
-    re.I
-)
+_GENERIC_CLOUDY_RX = re.compile(r"\b(cloud|hosting|datacenter|data\s*center|edge|cdn|compute|virtual|vps|infra|infrastructure)\b", re.I)
 
 def _looks_cloudy_but_unknown(ipwhois_obj: Optional[dict], http_probe: Optional[dict]) -> bool:
     if not ipwhois_obj:
         return False
-    fields = [
-        _normalize_str(ipwhois_obj.get("asn_description")),
-        _normalize_str((ipwhois_obj.get("network") or {}).get("name")),
-    ]
+    fields = [_normalize_str(ipwhois_obj.get("asn_description")), _normalize_str((ipwhois_obj.get("network") or {}).get("name"))]
     try:
         objects = ipwhois_obj.get("objects") or {}
         for o in objects.values():
@@ -410,9 +381,6 @@ def _looks_cloudy_but_unknown(ipwhois_obj: Optional[dict], http_probe: Optional[
                     return True
     return False
 
-# =============================
-# HTTP/TLS probing + fingerprints
-# =============================
 def _http_request_raw(ip: str, host: str, port: int, use_tls: bool, use_sni: bool, timeout: float) -> Tuple[Optional[int], Dict[str, str], bytes, Optional[dict]]:
     sock = None
     tls = None
@@ -457,7 +425,6 @@ def _http_request_raw(ip: str, host: str, port: int, use_tls: bool, use_sni: boo
             if sock: sock.close()
         except Exception:
             pass
-
     try:
         head, _, body = data.partition(b"\r\n\r\n")
         status_line, *hdr_lines = head.split(b"\r\n")
@@ -484,9 +451,10 @@ def _load_fingerprints(fp_path: Optional[str]) -> List[dict]:
     except Exception:
         return []
 
-def _match_fingerprints(status: Optional[int], headers: Dict[str, str], body: bytes, tls: Optional[dict], fps: List[dict]) -> Tuple[List[str], str]:
+def _match_fingerprints(status: Optional[int], headers: Dict[str, str], body: bytes, tls: Optional[dict], fps: List[dict]) -> Tuple[List[str], str, bool]:
     names = []
     conf = "none"
+    any_vulnerable = False
     text = body.decode(errors="ignore")
     rank = {"none": 0, "weak": 1, "medium": 2, "strong": 3}
     for rule in fps:
@@ -497,7 +465,7 @@ def _match_fingerprints(status: Optional[int], headers: Dict[str, str], body: by
         tls_sub = rule.get("tls_subject")
         tls_iss = rule.get("tls_issuer")
         level = (rule.get("confidence") or "weak").lower()
-
+        is_vulnerable_rule = rule.get("vulnerable", True)
         ok = True
         if exp_status:
             exp_list = exp_status if isinstance(exp_status, list) else [exp_status]
@@ -517,11 +485,12 @@ def _match_fingerprints(status: Optional[int], headers: Dict[str, str], body: by
             else:
                 if tls_sub and re.search(tls_sub, tls.get("subject",""), re.I) is None: ok = False
                 if tls_iss and re.search(tls_iss, tls.get("issuer",""), re.I) is None: ok = False
-
         if ok:
             names.append(name or "unnamed")
             conf = max(conf, level, key=lambda c: rank[c])
-    return names, conf
+            if is_vulnerable_rule:
+                any_vulnerable = True
+    return names, conf, any_vulnerable
 
 def _probe_http_suite(hostname: str, ips: List[str], timeout: float, no_sni: bool, fps: List[dict]) -> dict:
     if not ips:
@@ -529,30 +498,28 @@ def _probe_http_suite(hostname: str, ips: List[str], timeout: float, no_sni: boo
     results = {}
     matched: List[str] = []
     best_conf = "none"
+    fp_any_vulnerable = False
     rank = {"none": 0, "weak": 1, "medium": 2, "strong": 3}
-
     for ip in ips:
         st, hdrs, body, _ = _http_request_raw(ip, hostname, 80, use_tls=False, use_sni=False, timeout=timeout)
         if st is not None or hdrs or body:
-            names, conf = _match_fingerprints(st, hdrs, body, None, fps)
+            names, conf, vuln = _match_fingerprints(st, hdrs, body, None, fps)
             matched.extend(names); best_conf = max(best_conf, conf, key=lambda c: rank[c])
+            if vuln: fp_any_vulnerable = True
             results.setdefault(ip, {})["http"] = {"status": st, "headers": hdrs, "body_prefix_b64": b64encode(body).decode()}
         st2, hdrs2, body2, tls2 = _http_request_raw(ip, hostname, 443, use_tls=True, use_sni=True, timeout=timeout)
         if st2 is not None or hdrs2 or body2 or tls2:
-            names2, conf2 = _match_fingerprints(st2, hdrs2, body2, tls2, fps)
+            names2, conf2, vuln2 = _match_fingerprints(st2, hdrs2, body2, tls2, fps)
             matched.extend(names2); best_conf = max(best_conf, conf2, key=lambda c: rank[c])
+            if vuln2: fp_any_vulnerable = True
             results.setdefault(ip, {})["https"] = {"status": st2, "headers": hdrs2, "body_prefix_b64": b64encode(body2).decode()}
             results[ip]["tls"] = tls2 or {}
         if no_sni:
             st3, hdrs3, body3, tls3 = _http_request_raw(ip, hostname, 443, use_tls=True, use_sni=False, timeout=timeout)
             results.setdefault(ip, {})["https_no_sni"] = {"status": st3, "headers": hdrs3, "body_prefix_b64": b64encode(body3 or b"").decode()}
             if tls3: results[ip]["tls_no_sni"] = tls3
+    return {"per_ip": results, "fingerprints": sorted(set(matched)), "confidence": best_conf, "any_vulnerable": fp_any_vulnerable}
 
-    return {"per_ip": results, "fingerprints": sorted(set(matched)), "confidence": best_conf}
-
-# =============================
-# TCP port state helpers (for CSV/JSON, silent on console)
-# =============================
 def _tcp_port_state(ip: str, port: int, timeout: float) -> str:
     try:
         with _NET_SEM:
@@ -574,22 +541,12 @@ def _tcp_port_state(ip: str, port: int, timeout: float) -> str:
 def _tcp_states_for_ips(ips: List[str], max_ips: int, timeout: float) -> Dict[str, Dict[str, str]]:
     states: Dict[str, Dict[str, str]] = {}
     for ip in (ips or [])[: max(1, int(max_ips))]:
-        states[ip] = {
-            "tcp_80": _tcp_port_state(ip, 80, timeout),
-            "tcp_443": _tcp_port_state(ip, 443, timeout),
-        }
+        states[ip] = {"tcp_80": _tcp_port_state(ip, 80, timeout), "tcp_443": _tcp_port_state(ip, 443, timeout)}
     return states
 
-# =============================
-# Takeover confidence grading
-# =============================
-def _grade_takeover_confidence(takeover_type: str,
-                               http_probe: Optional[dict],
-                               tcp_states: Optional[dict],
-                               mode: str) -> str:
+def _grade_takeover_confidence(takeover_type: str, http_probe: Optional[dict], tcp_states: Optional[dict], mode: str) -> str:
     if not takeover_type or takeover_type == "UNKNOWN":
         return "none"
-
     def any_port_open(states: Optional[dict]) -> bool:
         if not isinstance(states, dict):
             return False
@@ -599,50 +556,32 @@ def _grade_takeover_confidence(takeover_type: str,
             if s.get("tcp_80") == "open" or s.get("tcp_443") == "open":
                 return True
         return False
-
     hp_conf = (http_probe or {}).get("confidence", "none") or "none"
     is_candidate = takeover_type == "A_CLOUD_REUSE_CANDIDATE"
     is_confirmed = takeover_type == "A_CLOUD_REUSE_CONFIRMED"
-
+    is_cname_fp = takeover_type == "CNAME_FINGERPRINT"
     if is_confirmed:
-        if hp_conf == "strong":
-            return "high"
-        if hp_conf in ("medium", "weak"):
-            return "medium"
+        if hp_conf == "strong": return "high"
+        if hp_conf in ("medium", "weak"): return "medium"
         return "medium"
-
-    if is_candidate:
-        if hp_conf in ("medium", "strong"):
-            return "medium"
-        if hp_conf == "weak" and mode == "loose":
-            return "medium"
-        if any_port_open(tcp_states):
-            return "medium"
+    if is_cname_fp:
+        if hp_conf == "strong": return "high"
+        if hp_conf == "medium": return "medium"
         return "low"
-
+    if is_candidate:
+        if hp_conf in ("medium", "strong"): return "medium"
+        if hp_conf == "weak" and mode == "loose": return "medium"
+        if any_port_open(tcp_states): return "medium"
+        return "low"
     return "none"
 
-# =============================
-# Ownership Middleware
-# =============================
 class OwnershipMiddleware:
-    def __init__(
-        self,
-        whois_delay: float = 1.0,
-        mode: str = "strict",
-        rdap_mode: str = "fast",
-        http_probe_enabled: bool = False,
-        http_timeout: float = 3.0,
-        http_retries: int = 1,
-        http_max_ips: int = 2,
-        no_sni: bool = False,
-        fp_file: Optional[str] = None,
-        providers_file: Optional[str] = None,
-        add_cloud_markers: Optional[List[str]] = None,
-        extra_cloud_asns: Optional[List[int]] = None,
-        unknown_cloud_log: Optional[str] = None,
-        whois_max_ips: int = 1,
-    ):
+    def __init__(self, whois_delay: float = 1.0, mode: str = "strict", rdap_mode: str = "fast",
+                 http_probe_enabled: bool = False, http_timeout: float = 3.0, http_retries: int = 1,
+                 http_max_ips: int = 2, no_sni: bool = False, fp_file: Optional[str] = None,
+                 providers_file: Optional[str] = None, add_cloud_markers: Optional[List[str]] = None,
+                 extra_cloud_asns: Optional[List[int]] = None, unknown_cloud_log: Optional[str] = None,
+                 whois_max_ips: int = 1):
         self.whois_delay = whois_delay
         self.mode = mode
         self.rdap_mode = rdap_mode
@@ -659,14 +598,13 @@ class OwnershipMiddleware:
             base = set(self._providers_cfg["asns"])
             base.update([int(a) for a in extra_cloud_asns if str(a).isdigit()])
             self._providers_cfg["asns"] = sorted(base)
-
         self._unknown_log_path = unknown_cloud_log or os.environ.get("EXHAUNT_UNKNOWN_ASN_LOG")
         self._unknown_log_lock = threading.Lock()
         self._unknown_seen: set = set()
-
         self._whois_lock = threading.Lock()
         self._whois_last = 0.0
-
+        self._whois_cache: Dict[str, dict] = {}
+        self._whois_cache_lock = threading.Lock()
         self._whois_max_ips = max(1, int(whois_max_ips))
 
     def get_dns_provider(self, domain: str) -> Dict:
@@ -688,7 +626,6 @@ class OwnershipMiddleware:
                 result["dns_error"] = f"DNS provider lookup failed: {msg}"
                 result["classification"] = classify(Risk.BROKEN, "SERVFAIL (broken delegation)", {"domain": base, "error": str(e)})
                 return result
-
             if not ans or not getattr(ans, "rrset", None):
                 result["dns_error"] = f"DNS provider lookup failed: No NS answer"
                 if self.mode == "loose":
@@ -696,18 +633,13 @@ class OwnershipMiddleware:
                 else:
                     result["classification"] = classify(Risk.BROKEN, "Empty NS answer (delegation exists)", {"domain": base})
                 return result
-
             ns_hosts = [str(r.target).rstrip(".") for r in ans]
             result["ns"] = ns_hosts
             result["classification"] = classify(Risk.OK, "NS present", {"domain": base, "ns": ns_hosts}, confidence="MEDIUM")
             return result
-
         except dns.exception.Timeout as e:
             result["dns_error"] = f"DNS provider lookup failed: Timeout {e}"
-            if self.mode == "loose":
-                result["classification"] = classify(Risk.VULNERABLE, "Timeout (loose mode)", {"domain": base, "error": str(e)}, confidence="LOW")
-            else:
-                result["classification"] = classify(Risk.RETRY, "Timeout", {"domain": base, "error": str(e)})
+            result["classification"] = classify(Risk.RETRY, "Timeout", {"domain": base, "error": str(e)})
             return result
         except Exception as e:
             result["dns_error"] = f"DNS provider lookup failed: {e}"
@@ -715,6 +647,10 @@ class OwnershipMiddleware:
             return result
 
     def get_domain_owner(self, base_domain: str) -> Dict:
+        with self._whois_cache_lock:
+            cached = self._whois_cache.get(base_domain)
+        if cached is not None:
+            return cached
         out = {"whois_owner": None, "whois_registrar": None, "whois_error": None, "tls_cert": None}
         if whois is not None:
             try:
@@ -727,10 +663,8 @@ class OwnershipMiddleware:
                     w = whois.whois(base_domain)
                 owner = w.get("org") or w.get("registrant_org") or w.get("registrant_name") or w.get("name")
                 registrar = w.get("registrar")
-                if isinstance(owner, list):
-                    owner = owner[0] if owner else None
-                if isinstance(registrar, list):
-                    registrar = registrar[0] if registrar else None
+                if isinstance(owner, list): owner = owner[0] if owner else None
+                if isinstance(registrar, list): registrar = registrar[0] if registrar else None
                 out["whois_owner"] = owner
                 out["whois_registrar"] = registrar
             except Exception as e:
@@ -740,6 +674,8 @@ class OwnershipMiddleware:
         cert_info = _get_cert_org(base_domain)
         if cert_info:
             out["tls_cert"] = cert_info
+        with self._whois_cache_lock:
+            self._whois_cache[base_domain] = out
         return out
 
     def get_service_provider(self, hostname: str) -> Dict:
@@ -750,7 +686,6 @@ class OwnershipMiddleware:
         ips = _resolve_ips(terminal)
         svc["ips"] = ips
         svc["loose_match_provider"] = any(terminal.lower().endswith(suf) for suf in PROVIDER_SUFFIXES)
-
         if ips and IPWhois is not None:
             info_primary = None
             for ip in ips[: self._whois_max_ips]:
@@ -765,7 +700,6 @@ class OwnershipMiddleware:
                     "network_name": (info_primary.get("network") or {}).get("name"),
                     "raw": info_primary,
                 }
-
         term_reg = _registrable_domain(terminal)
         base_reg = _registrable_domain(hostname)
         if term_reg and term_reg != base_reg:
@@ -798,74 +732,68 @@ class OwnershipMiddleware:
         dns_provider = self.get_dns_provider(base_domain)
         domain_owner = self.get_domain_owner(base_domain)
         service_provider = self.get_service_provider(hostname)
-
         ipw_raw = (service_provider.get("ip_whois") or {}).get("raw") or (service_provider.get("ip_whois") or {})
         is_cloud = _is_cloud_provider(ipw_raw, self._providers_cfg) if ipw_raw else False
         takeover_type = "UNKNOWN"
-
         http_probe = None
         fp_conf = "none"
         fp_names: List[str] = []
+        fp_any_vulnerable = False
         if self.http_probe_enabled and service_provider.get("ips"):
             target_ips = (service_provider.get("ips") or [])[: self.http_max_ips]
-            http_probe = _probe_http_suite(
-                hostname=hostname,
-                ips=target_ips,
-                timeout=self.http_timeout,
-                no_sni=self.no_sni,
-                fps=self._fps
-            )
+            http_probe = _probe_http_suite(hostname=hostname, ips=target_ips, timeout=self.http_timeout, no_sni=self.no_sni, fps=self._fps)
             fp_names = http_probe.get("fingerprints") or []
             fp_conf = http_probe.get("confidence") or "none"
-
+            fp_any_vulnerable = http_probe.get("any_vulnerable", False)
         tcp_states = _tcp_states_for_ips(service_provider.get("ips") or [], self.http_max_ips, self.http_timeout)
-
         risk = dns_provider.get("classification", {}).get("risk", "OK")
         reason = dns_provider.get("classification", {}).get("reason", "NS present")
-
         loose_vuln = False
         if self.mode == "loose" and service_provider.get("loose_match_provider"):
             loose_vuln = True
-
         if is_cloud and (service_provider.get("cname_chain") == []):
             takeover_type = "A_CLOUD_REUSE_CANDIDATE"
-            if fp_conf == "strong":
+            # Gap 1 fix: only promote to CONFIRMED when a matched fingerprint rule
+            # is actually claimable (vulnerable: true). Rules marked vulnerable: false
+            # (Cloudflare, Fastly, CloudFront, ALB, Traffic Manager) fire for context
+            # only and must not trigger CONFIRMED promotion.
+            if fp_conf == "strong" and fp_any_vulnerable:
                 takeover_type = "A_CLOUD_REUSE_CONFIRMED"
                 risk = Risk.VULNERABLE.value
                 reason = "A-record to cloud IP with default/unbound backend (confirmed by fingerprints)"
             elif self.mode == "loose" and fp_conf in ("weak", "medium"):
-                # FIX 3: previously only set loose_vuln=True here, leaving risk="OK"
-                # in dns_provider.classification while the console printed VULNERABLE.
-                # JSON, CSV, and console are now consistent: all show VULNERABLE.
                 loose_vuln = True
                 risk = Risk.VULNERABLE.value
                 reason = "A-record to cloud IP with unbound backend signal (loose mode)"
         else:
             if (service_provider.get("cname_chain") == []) and _looks_cloudy_but_unknown(ipw_raw, http_probe):
                 self._log_unknown_cloud(hostname, service_provider.get("ips") or [], ipw_raw)
-
+        # Gap 2 fix: CNAME-based fingerprint detection for non-cloud services.
+        # Heroku, GitHub Pages, Netlify, Shopify etc. are identified via CNAME suffix,
+        # not via cloud ASN. A matching fingerprint on any of these is a confirmed
+        # takeover regardless of is_cloud.
+        if (
+            takeover_type == "UNKNOWN"
+            and fp_names
+            and fp_any_vulnerable
+            and service_provider.get("cname_chain")
+        ):
+            cname_terminal = (service_provider.get("cname_chain") or [""])[-1].lower()
+            fp_has_cname_match = any(
+                not rule.get("cname_suffix") or cname_terminal.endswith(rule["cname_suffix"].lower())
+                for rule in self._fps
+                if rule.get("name") in fp_names and rule.get("vulnerable", True)
+            )
+            if fp_has_cname_match:
+                takeover_type = "CNAME_FINGERPRINT"
+                risk = Risk.VULNERABLE.value
+                reason = f"CNAME points to unbound service (fingerprint: {'; '.join(fp_names)})"
         hostname_ips = _resolve_ips(hostname)
-
-        takeover_confidence = _grade_takeover_confidence(
-            takeover_type=takeover_type,
-            http_probe=http_probe,
-            tcp_states=tcp_states,
-            mode=self.mode
-        )
-
+        takeover_confidence = _grade_takeover_confidence(takeover_type=takeover_type, http_probe=http_probe, tcp_states=tcp_states, mode=self.mode)
         return {
-            "hostname": hostname,
-            "base_domain": base_domain,
-            "hostname_ips": hostname_ips,
-            "dns_provider": dns_provider,
-            "domain_owner": domain_owner,
-            "service_provider": service_provider,
-            "http_probe": http_probe,
-            "tcp_states": tcp_states,
-            "takeover_type": takeover_type,
-            "takeover_confidence": takeover_confidence,
-            "http_fingerprints": fp_names,
-            "loose_vulnerable": loose_vuln,
-            "mode": self.mode,
-            "rdap_mode": self.rdap_mode,
+            "hostname": hostname, "base_domain": base_domain, "hostname_ips": hostname_ips,
+            "dns_provider": dns_provider, "domain_owner": domain_owner, "service_provider": service_provider,
+            "http_probe": http_probe, "tcp_states": tcp_states, "takeover_type": takeover_type,
+            "takeover_confidence": takeover_confidence, "http_fingerprints": fp_names,
+            "loose_vulnerable": loose_vuln, "mode": self.mode, "rdap_mode": self.rdap_mode,
         }
