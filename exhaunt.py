@@ -44,10 +44,6 @@ def _fmt_fp(fp_list):
     return "no fingerprints matched"
 
 def _tcp_cols(r: dict) -> tuple[str, str]:
-    """
-    Pick the first probed IP (same ordering as service_provider.ips slice)
-    and return (tcp_80, tcp_443). If absent, return empty strings.
-    """
     tcp_states = r.get("tcp_states") or {}
     sp = r.get("service_provider") or {}
     ips = sp.get("ips") or []
@@ -58,16 +54,13 @@ def _tcp_cols(r: dict) -> tuple[str, str]:
     return (states.get("tcp_80", "") or "", states.get("tcp_443", "") or "")
 
 def _flatten_row(r: dict) -> dict:
-    """Flatten ExHaunt nested result to CSV (+ takeover, confidence & TCP fields)."""
     dp = r.get("dns_provider") or {}
     cls = dp.get("classification") or {}
     dom = r.get("domain_owner") or {}
     sp = r.get("service_provider") or {}
     chain = sp.get("cname_chain") or []
     ipw = sp.get("ip_whois") or {}
-
     tcp80, tcp443 = _tcp_cols(r)
-
     return {
         "subdomain": r.get("hostname", ""),
         "cname": _first(chain) or "",
@@ -85,10 +78,6 @@ def _flatten_row(r: dict) -> dict:
         "service_network": ipw.get("network_name") or "",
         "service_asn": ipw.get("asn") or "",
         "service_asn_desc": ipw.get("asn_description") or "",
-        # FIX 2: preserve "UNKNOWN" and "none" as explicit strings.
-        # `or ""` previously coerced "UNKNOWN"/"none" strings truthfully (non-empty
-        # strings are truthy so this was fine), BUT if analyze() ever returned None
-        # the column silently blanked. Use explicit None-guard instead of or "".
         "takeover_type": r.get("takeover_type") if r.get("takeover_type") is not None else "",
         "takeover_confidence": r.get("takeover_confidence") if r.get("takeover_confidence") is not None else "",
         "http_fingerprint": _fmt_fp(r.get("http_fingerprints") or []),
@@ -96,10 +85,7 @@ def _flatten_row(r: dict) -> dict:
         "tcp_443": tcp443,
     }
 
-# ---------------- JSON compaction helpers ----------------
-
 def _prune_empty(obj):
-    """Recursively drop None / empty dicts / empty lists."""
     if isinstance(obj, dict):
         out = {}
         for k, v in obj.items():
@@ -123,21 +109,8 @@ def _prune_empty(obj):
     return obj
 
 def _compact_result(r: dict) -> dict:
-    """
-    Keep decision-critical fields; drop heavy debug payloads & duplicates.
-    tcp_states is always preserved even when http_probe is absent.
-    http_probe fingerprints + confidence are preserved; per_ip blobs are dropped.
-    """
     r2 = deepcopy(r)
-
-    # FIX 4: stash tcp_states and fingerprint summary BEFORE _prune_empty runs.
-    # _prune_empty drops empty dicts/lists recursively. When --http-probe is off,
-    # http_probe is None (pruned fine) but tcp_states port values may be empty
-    # strings which survive — however if all IPs are missing the dict collapses.
-    # Explicit stash + re-attach guarantees both fields always survive compaction.
-    saved_tcp = r2.get("tcp_states")  # may be dict or None
-
-    # http_probe: keep fingerprints + confidence, drop per_ip blobs
+    saved_tcp = r2.get("tcp_states")
     hp = r2.get("http_probe")
     saved_fp_summary = None
     if isinstance(hp, dict):
@@ -146,18 +119,12 @@ def _compact_result(r: dict) -> dict:
             "confidence": hp.get("confidence") or "none",
         }
         hp.pop("per_ip", None)
-
-    # dns_provider: drop transient dns_error (noise in compact mode)
     dp = r2.get("dns_provider")
     if isinstance(dp, dict):
         dp.pop("dns_error", None)
-
-    # domain_owner: drop raw TLS cert blob
     dom = r2.get("domain_owner")
     if isinstance(dom, dict):
         dom.pop("tls_cert", None)
-
-    # service_provider: strip raw IPWhois blob and RDAP detail
     sp = r2.get("service_provider")
     if isinstance(sp, dict):
         ipw = sp.get("ip_whois")
@@ -170,27 +137,16 @@ def _compact_result(r: dict) -> dict:
             }
             sp["ip_whois"] = compact_ipw
         sp.pop("rdap", None)
-
-    # http_fingerprints top-level key is redundant with http_probe.fingerprints
     r2.pop("http_fingerprints", None)
-
-    # Prune empty values from the whole structure
     r2 = _prune_empty(r2)
-
-    # Re-attach preserved fields (overwrite whatever _prune_empty left)
     if saved_tcp is not None:
         r2["tcp_states"] = saved_tcp
     if saved_fp_summary is not None:
-        # Merge back into http_probe if it survived, else create minimal node
         if isinstance(r2.get("http_probe"), dict):
             r2["http_probe"].update(saved_fp_summary)
         elif saved_fp_summary["fingerprints"]:
-            # http_probe was None/pruned but we do have fingerprint data — keep it
             r2["http_probe"] = saved_fp_summary
-
     return r2
-
-# ---------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -200,7 +156,8 @@ def main():
   python exhaunt.py --subs www.example.com api.example.com
   python exhaunt.py --file subs.txt --threads auto --mode strict --fp-file fingerprints.yaml
 """,
-        formatter_class=argparse.RawTextHelpFormatter
+        formatter_class=argparse.RawTextHelpFormatter,
+        allow_abbrev=False,
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
@@ -211,7 +168,7 @@ def main():
     parser.add_argument("--whois-delay", type=float, default=1.0, help="Seconds to wait between WHOIS lookups (default: 1.0)")
     parser.add_argument("--quiet", action="store_true", help="Disable progress bar output")
     parser.add_argument("--logfile", default=None, help="Optional log file to write progress updates")
-    parser.add_argument("--color", action="store_true", help="Enable colored live output (vulns/candidates)")
+    parser.add_argument("--color", action="store_true", help="Enabled colored live output (vulns/candidates)")
 
     parser.add_argument("--mode", choices=["strict","loose"], default="strict",
                         help="Detection strictness: 'strict' = hard evidence only, 'loose' = also surface suspicious but unproven cases")
@@ -221,7 +178,6 @@ def main():
     parser.add_argument("--print", dest="print_mode", choices=["short", "summary", "both"], default="both",
                         help="Console verbosity: 'short' (live minimal lines), 'summary' (final detailed recap), or 'both' (default).")
 
-    # HTTP/TLS probing & fingerprints
     parser.add_argument("--http-probe", action="store_true",
                         help="Enable HTTP/TLS probing + fingerprinting (default OFF; auto-enabled if you pass --mode)")
     parser.add_argument("--no-sni", action="store_true",
@@ -232,7 +188,6 @@ def main():
     parser.add_argument("--fp-file", default=os.path.join(os.path.dirname(__file__), "fingerprints.yaml"),
                         help="Fingerprint YAML file (default: ./fingerprints.yaml)")
 
-    # Cloud provider taxonomy (YAML-first)
     parser.add_argument("--providers-file",
                         default=os.path.join(os.path.dirname(__file__), "providers.yaml"),
                         help="Cloud providers YAML (ASNs + regex). Default: ./providers.yaml")
@@ -243,21 +198,17 @@ def main():
     parser.add_argument("--whois-max-ips", type=int, default=1,
                         help="Sample up to N IPs for IPWhois RDAP (default: 1 = first IP only)")
 
-    # Unknown ASN logging
     parser.add_argument("--unknown-cloud-log", default=None,
                         help="Path to log suspicious unknown ASNs (CSV lines). Disabled if not provided.")
 
-    # JSON compaction
     parser.add_argument("--json-compact", action="store_true",
                         help="Write a trimmed JSON (drops heavy blobs, keeps tcp_states)")
 
     args = parser.parse_args()
 
-    # Let ownership_middleware colorize warnings
     if args.color:
         os.environ["EXHAUNT_COLOR"] = "1"
 
-    # threads
     if str(args.threads).lower() == "auto":
         max_workers = min(64, (os.cpu_count() or 4) * 2)
     else:
@@ -266,7 +217,6 @@ def main():
         except ValueError:
             print("--threads must be an integer or 'auto'", file=sys.stderr); sys.exit(2)
 
-    # inputs
     if args.file:
         subdomains = read_input_file(args.file)
         output_prefix = os.path.splitext(os.path.basename(args.file))[0]
@@ -277,11 +227,9 @@ def main():
     if not subdomains:
         print("No subdomains provided.", file=sys.stderr); sys.exit(2)
 
-    # Auto-enable probing when user explicitly sets --mode
     user_specified_mode = any(a == "--mode" for a in sys.argv)
     effective_http_probe = args.http_probe or user_specified_mode
 
-    # middleware
     om = OwnershipMiddleware(
         whois_delay=args.whois_delay,
         mode=args.mode,
@@ -299,7 +247,6 @@ def main():
         whois_max_ips=args.whois_max_ips,
     )
 
-    # run
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futs = [pool.submit(process_one, s, om) for s in subdomains]
@@ -311,10 +258,19 @@ def main():
             disable=args.quiet,
             log_file=args.logfile,
         )
-        # Initialize the bar BEFORE any output, then write the banner through progress
         progress.start()
         if args.color and not args.quiet:
             progress.write("\nExHaunt 👻 by a9hora — scanning for haunted subdomains...\n")
+        if not args.quiet:
+            auto_note = f" (auto = {max_workers})" if str(args.threads).lower() == "auto" else ""
+            probe_status = "on" if effective_http_probe else "off"
+            progress.write(
+                f"  Targets : {len(subdomains)} subdomains  |  "
+                f"Threads : {max_workers}{auto_note}  |  "
+                f"Mode : {args.mode}  |  "
+                f"RDAP : {args.rdap_mode}  |  "
+                f"HTTP probe : {probe_status}"
+            )
 
         for f in progress.wrap_futures(futs):
             res = f.result()
@@ -326,34 +282,41 @@ def main():
                 risk = cls.get("risk", "OK")
                 takeover_type = res.get("takeover_type") or ""
                 is_loose = (res.get("loose_vulnerable") is True and args.mode == "loose")
-                if risk == "VULNERABLE" or is_loose or takeover_type.startswith("A_CLOUD_REUSE"):
+                if risk == "VULNERABLE" or is_loose or takeover_type.startswith("A_CLOUD_REUSE") or takeover_type == "CNAME_FINGERPRINT":
                     host = res.get("hostname", "?")
                     reason = cls.get("reason", "")
                     fp = ";".join(res.get("http_fingerprints") or []) or "no fingerprints matched"
                     conf = res.get("takeover_confidence")
-                    extra = f" | CONF = {conf}" if conf else ""
-                    progress.write(Fore.RED + f"[{risk}] {host} :: {reason} | TAKEOVER = {takeover_type}{extra} | FingerPrint = {fp}" + Style.RESET_ALL)
+                    extra = f" | CONF = {conf.upper()}" if conf else ""
+                    if takeover_type == "A_CLOUD_REUSE_CONFIRMED":
+                        display_risk = "VULNERABLE"
+                        live_color = Fore.RED
+                    elif takeover_type == "A_CLOUD_REUSE_CANDIDATE":
+                        display_risk = "CANDIDATE"
+                        live_color = Fore.YELLOW
+                    elif takeover_type == "CNAME_FINGERPRINT":
+                        display_risk = "VULNERABLE"
+                        live_color = Fore.RED
+                    else:
+                        display_risk = risk
+                        live_color = Fore.RED
+                    progress.write(live_color + f"[{display_risk}] {host} :: {reason} | TAKEOVER = {takeover_type}{extra} | FingerPrint = {fp}" + Style.RESET_ALL)
 
-    # JSON
     if args.json_compact:
         compacted = [_compact_result(r) for r in results]
         write_json(compacted, f"{output_prefix}.json")
     else:
         write_json(results, f"{output_prefix}.json")
 
-    # CSV (+ takeover, confidence & TCP fields)
     flat_rows = [_flatten_row(r) for r in results]
     fieldnames = [
         "subdomain","cname","hostname_ips","status","takeover_risk","owner_registrar","owner_org",
         "dns_provider","dns_error","service_cname","service_cname_chain",
         "service_ips","service_country","service_network","service_asn","service_asn_desc",
         "takeover_type","takeover_confidence","http_fingerprint","tcp_80","tcp_443"
-        # FIX 1: was "http_fp" — key name mismatched _flatten_row which emits "http_fingerprint";
-        # the column was silently blank in every CSV output.
     ]
     write_csv(flat_rows, f"{output_prefix}.csv", fieldnames)
 
-    # final summary (print above the bar through progress)
     if args.color and args.print_mode in ("summary", "both"):
         for r in results:
             host = r.get("hostname", "?")
@@ -375,7 +338,18 @@ def main():
             elif risk == "RETRY": color = Fore.MAGENTA
             else: color = Fore.CYAN
 
-            line = f"[{risk}] {host} :: {reason} | TAKEOVER = {takeover_type}"
+            display_risk = risk
+            if takeover_type == "A_CLOUD_REUSE_CONFIRMED":
+                display_risk = "VULNERABLE"
+                color = Fore.RED
+            elif takeover_type == "A_CLOUD_REUSE_CANDIDATE":
+                display_risk = "CANDIDATE"
+                color = Fore.YELLOW
+            elif takeover_type == "CNAME_FINGERPRINT":
+                display_risk = "VULNERABLE"
+                color = Fore.RED
+
+            line = f"[{display_risk}] {host} :: {reason} | TAKEOVER = {takeover_type}"
             if conf: line += f" | CONF = {conf.upper()}"
             line += f" | NS = {ns} | WHOIS_ORG = {owner}"
             if cname: line += f" | CNAME→{cname[-1]}"
