@@ -10,6 +10,8 @@ from ownership_middleware import OwnershipMiddleware
 from progress_middleware import ProgressMiddleware
 from colorama import Fore, Style, init
 
+__version__ = "1.1.0"   # dangling-edge detection, UNKNOWN bucket, target rcode, verification TXT, wildcard, CT, Cloudflare owner checks
+
 # Windows-friendly colors
 init(autoreset=True)
 
@@ -53,6 +55,29 @@ def _tcp_cols(r: dict) -> tuple[str, str]:
     states = tcp_states.get(first_ip) or {}
     return (states.get("tcp_80", "") or "", states.get("tcp_443", "") or "")
 
+def _edge_cols(r: dict) -> dict:
+    """v1.1.0 CSV columns from the edge block (empty when the host is not a dangling-edge case)."""
+    e = r.get("edge") or {}
+    sp = r.get("service_provider") or {}
+    ver = e.get("verification_records") or {}
+    ct = e.get("ct") or {}
+    cf = e.get("cloudflare_owner_checks") or {}
+    zones_present = ""
+    if cf.get("checked"):
+        present = [n for n, z in (cf.get("zones_present") or {}).items() if z]
+        zones_present = ";".join(present) if present else "none"
+    hold = cf.get("apex_hold") or {}
+    return {
+        "target_rcode": sp.get("target_rcode") or "",
+        "edge_provider": e.get("provider") or "",
+        "claimable_by_free_account": "" if e.get("claimable_by_free_account") is None else str(e.get("claimable_by_free_account")).lower(),
+        "via_wildcard": "" if not (e.get("wildcard") or {}).get("checked") else str(bool((e.get("wildcard") or {}).get("via_wildcard"))).lower(),
+        "verification_txt": ";".join(f"{n}={'cname-masked' if (v and str(v[0]).startswith('no TXT')) else 'present'}" for n, v in ver.items()),
+        "ct_last_cert": ct.get("last_not_before") or ("" if not ct.get("checked") else ("none" if ct.get("entries") == 0 else ct.get("error") or "")),
+        "cf_zone_present": zones_present,
+        "cf_apex_hold_subdomains": "" if not hold or "include_subdomains" not in hold else str(bool(hold.get("include_subdomains"))).lower(),
+    }
+
 def _flatten_row(r: dict) -> dict:
     dp = r.get("dns_provider") or {}
     cls = dp.get("classification") or {}
@@ -61,7 +86,8 @@ def _flatten_row(r: dict) -> dict:
     chain = sp.get("cname_chain") or []
     ipw = sp.get("ip_whois") or {}
     tcp80, tcp443 = _tcp_cols(r)
-    return {
+    row = _edge_cols(r)
+    row.update({
         "subdomain": r.get("hostname", ""),
         "cname": _first(chain) or "",
         "hostname_ips": _join(r.get("hostname_ips") or []),
@@ -83,7 +109,8 @@ def _flatten_row(r: dict) -> dict:
         "http_fingerprint": _fmt_fp(r.get("http_fingerprints") or []),
         "tcp_80": tcp80,
         "tcp_443": tcp443,
-    }
+    })
+    return row
 
 def _prune_empty(obj):
     if isinstance(obj, dict):
@@ -204,6 +231,15 @@ def main():
     parser.add_argument("--json-compact", action="store_true",
                         help="Write a trimmed JSON (drops heavy blobs, keeps tcp_states)")
 
+    # v1.1.0 — dangling-edge detection and claimability context
+    parser.add_argument("--edges-file", default=os.path.join(os.path.dirname(__file__), "edges.yaml"),
+                        help="Edge-provider table (suffixes, claim requirements, verification TXT names, probe IPs). Default: ./edges.yaml")
+    parser.add_argument("--ct", action="store_true",
+                        help="For dangling-edge hosts, query crt.sh for the last certificate issued (public, ~1 req/s)")
+    parser.add_argument("--cf-token", default=os.environ.get("CLOUDFLARE_API_TOKEN"),
+                        help="Cloudflare API token for YOUR account(s): read-only zone presence + apex zone-hold checks on cdn.cloudflare.net targets (default: $CLOUDFLARE_API_TOKEN)")
+    parser.add_argument("--version", action="version", version=f"ExHaunt {__version__}")
+
     args = parser.parse_args()
 
     if args.color:
@@ -245,6 +281,9 @@ def main():
         extra_cloud_asns=[int(x) for x in (args.cloud_asn or []) if str(x).isdigit()],
         unknown_cloud_log=args.unknown_cloud_log,
         whois_max_ips=args.whois_max_ips,
+        edges_file=args.edges_file,
+        want_ct=args.ct,
+        cf_token=args.cf_token,
     )
 
     results = []
@@ -265,11 +304,14 @@ def main():
             auto_note = f" (auto = {max_workers})" if str(args.threads).lower() == "auto" else ""
             probe_status = "on" if effective_http_probe else "off"
             progress.write(
-                f"  Targets : {len(subdomains)} subdomains  |  "
+                f"  ExHaunt {__version__}  |  "
+                f"Targets : {len(subdomains)} subdomains  |  "
                 f"Threads : {max_workers}{auto_note}  |  "
                 f"Mode : {args.mode}  |  "
                 f"RDAP : {args.rdap_mode}  |  "
-                f"HTTP probe : {probe_status}"
+                f"HTTP probe : {probe_status}  |  "
+                f"Fingerprints : {len(om._fps)}  |  Edge providers : {len(om._edges)}  |  "
+                f"CT : {'on' if args.ct else 'off'}  |  Cloudflare checks : {'on' if args.cf_token else 'off'}"
             )
 
         for f in progress.wrap_futures(futs):
@@ -282,7 +324,11 @@ def main():
                 risk = cls.get("risk", "OK")
                 takeover_type = res.get("takeover_type") or ""
                 is_loose = (res.get("loose_vulnerable") is True and args.mode == "loose")
-                if risk == "VULNERABLE" or is_loose or takeover_type.startswith("A_CLOUD_REUSE") or takeover_type == "CNAME_FINGERPRINT":
+                if takeover_type.endswith("-dangling-edge") or risk == "UNKNOWN":
+                    host = res.get("hostname", "?"); reason = cls.get("reason", ""); conf = res.get("takeover_confidence")
+                    color = Fore.YELLOW if risk == "BROKEN" else (Fore.RED if risk == "VULNERABLE" else Fore.BLUE)
+                    progress.write(color + f"[{risk}] {host} :: {reason} | TAKEOVER = {takeover_type}" + (f" | CONF = {str(conf).upper()}" if conf else "") + Style.RESET_ALL)
+                elif risk == "VULNERABLE" or is_loose or takeover_type.startswith("A_CLOUD_REUSE") or takeover_type == "CNAME_FINGERPRINT":
                     host = res.get("hostname", "?")
                     reason = cls.get("reason", "")
                     fp = ";".join(res.get("http_fingerprints") or []) or "no fingerprints matched"
@@ -313,7 +359,10 @@ def main():
         "subdomain","cname","hostname_ips","status","takeover_risk","owner_registrar","owner_org",
         "dns_provider","dns_error","service_cname","service_cname_chain",
         "service_ips","service_country","service_network","service_asn","service_asn_desc",
-        "takeover_type","takeover_confidence","http_fingerprint","tcp_80","tcp_443"
+        "takeover_type","takeover_confidence","http_fingerprint","tcp_80","tcp_443",
+        # v1.1.0
+        "target_rcode","edge_provider","claimable_by_free_account","via_wildcard","verification_txt",
+        "ct_last_cert","cf_zone_present","cf_apex_hold_subdomains",
     ]
     write_csv(flat_rows, f"{output_prefix}.csv", fieldnames)
 
@@ -336,6 +385,7 @@ def main():
             if risk == "VULNERABLE": color = Fore.RED
             elif risk in ("BROKEN","ENV_ERROR"): color = Fore.YELLOW
             elif risk == "RETRY": color = Fore.MAGENTA
+            elif risk == "UNKNOWN": color = Fore.BLUE
             else: color = Fore.CYAN
 
             display_risk = risk
@@ -355,6 +405,19 @@ def main():
             if cname: line += f" | CNAME→{cname[-1]}"
             if asn or asn_desc: line += f" | ASN = {asn} ({asn_desc})"
             if fp: line += f" | FingerPrint = {fp}"
+            e = r.get("edge") or {}
+            if e:
+                extras = [f"rcode={e.get('target_rcode')}", f"claimable_by_free_account={e.get('claimable_by_free_account')}"]
+                if (e.get("wildcard") or {}).get("via_wildcard"): extras.append(f"wildcard={e['wildcard'].get('wildcard_scope')}")
+                if e.get("verification_records"): extras.append("stale_verification_txt=" + ";".join(e["verification_records"].keys()))
+                if (e.get("ct") or {}).get("checked"): extras.append(f"ct_last_cert={(e['ct'].get('last_not_before') or 'none')}")
+                cf = e.get("cloudflare_owner_checks") or {}
+                if cf.get("checked"):
+                    present = [n for n, z in (cf.get("zones_present") or {}).items() if z]
+                    extras.append("cf_zone_present=" + (";".join(present) if present else "none"))
+                    if (cf.get("apex_hold") or {}).get("hold") is not None:
+                        extras.append(f"apex_hold_subdomains={cf['apex_hold'].get('include_subdomains')}")
+                line += " | EDGE: " + " ".join(extras)
             progress.write(color + line + Style.RESET_ALL)
 
 if __name__ == "__main__":

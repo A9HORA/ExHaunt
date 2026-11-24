@@ -3,7 +3,9 @@
 *Find and classify dangling subdomains before they haunt you.*
 
 ExHaunt helps you identify **risky, abandoned, or misconfigured subdomains** before attackers take advantage of them.
-It sorts each subdomain into clear categories — `OK`, `VULNERABLE`, `BROKEN`, `RETRY`, `ENV_ERROR` — and assigns a **confidence level** so you understand which findings truly matter.
+It sorts each subdomain into clear categories — `OK`, `VULNERABLE`, `BROKEN`, `UNKNOWN`, `RETRY`, `ENV_ERROR` — and assigns a **confidence level** so you understand which findings truly matter.
+
+**v1.1.0:** a CNAME that ends on a CDN/SaaS edge name with no address behind it is now `BROKEN` ("dangling edge") with the provider's claim requirements spelled out, never `OK`; shapes no rule covers are `UNKNOWN`. See `CHANGELOG.md`.
 
 > Built & maintained by **[A9HORA](https://x.com/A9HORA)**
 > <p align="center">
@@ -35,6 +37,13 @@ It sorts each subdomain into clear categories — `OK`, `VULNERABLE`, `BROKEN`, 
 * [x] **Container-ready single binary** — optional Docker image that packages ExHaunt as a self-contained CLI (no Python/runtime needed in the container).
 * [x] **Provider HTTP fingerprinting** — identifies characteristic default responses from cloud services to strengthen takeover confirmation.
 * [x] **External fingerprint library (YAML-based)** — supports customizable fingerprint rules without changing code `(extendable via fingerprints.yaml)`.
+* [x] **Dangling-edge detection (`edges.yaml`)** *(v1.1.0)* — CNAME chains ending on a known CDN/SaaS edge with no address are `BROKEN`, with the final target's DNS rcode, whether a free account can claim the name, and the provider's documented claim requirements.
+* [x] **`UNKNOWN` bucket** *(v1.1.0)* — "no rule covers this" is reported as such instead of `OK`.
+* [x] **Stale verification records + wildcard detection** *(v1.1.0)* — `cloudflare-verify.<host>`, `asuid.<host>`, `_dnsauth.<host>`, `_acme-challenge.<host>` lookups; a random sibling label tells you when the exposure is `*.<parent>`, not one host.
+* [x] **Provider edge probe (SNI/Host)** *(v1.1.0)* — when the target has no address, the provider's own anycast edge is asked for the hostname so the existing fingerprints still identify the provider.
+* [x] **Certificate-transparency check (`--ct`)** *(v1.1.0)* — last certificate issued for a dangling host (crt.sh); "nothing since <date>" is cheap evidence nobody activated it.
+* [x] **Cloudflare owner-side checks (`--cf-token`)** *(v1.1.0)* — read-only: is the zone present in *your* account, does the apex zone hold cover subdomains.
+* [x] **`--version`** and a run header that states the rule set in use.
 
 ### 🔮 Upcoming
 
@@ -101,6 +110,13 @@ Exactly one of `--file` or `--subs` is required.
 * `--http-max-ips N` *(default: 2)* — max IPs to probe per host.
 * `--fp-file PATH` — custom `fingerprints.yaml` (defaults to bundled file).
 
+### Dangling edges (v1.1.0)
+
+* `--edges-file PATH` — edge-provider table (defaults to bundled `edges.yaml`): terminal suffixes, "gone" rcodes, free-account claimability, claim requirements, verification TXT names, probe IPs, docs.
+* `--ct` — for dangling-edge hosts, query crt.sh for the newest certificate (public, ~1 request/s, cached per host).
+* `--cf-token TOKEN` *(or `CLOUDFLARE_API_TOKEN`)* — read-only checks against **your** Cloudflare account(s) for `cdn.cloudflare.net` targets: candidate zones present, apex zone hold `include_subdomains`. Never creates or changes anything.
+* `--version` — print the ExHaunt version.
+
 ### Provider / Cloud Awareness
 
 * `--providers-file PATH` — custom `providers.yaml` for ASN/provider mapping.
@@ -137,11 +153,18 @@ Exactly one of `--file` or `--subs` is required.
 
 ### Risk Levels
 
-* **OK** — healthy
-* **VULNERABLE** — confirmed risk
-* **BROKEN** — DNS misconfiguration
+* **OK** — healthy: the name resolves to an address, or a rule positively cleared it
+* **VULNERABLE** — confirmed risk (fingerprint for a claimable service, or a free-account-claimable dangling edge in `loose` mode)
+* **BROKEN** — DNS misconfiguration, including a **dangling edge** *(v1.1.0)*: the CNAME chain ends on a known CDN/SaaS edge name that has no address. `takeover_type` is `<provider>-dangling-edge`; the `status` text and the `edge` JSON block say what a claimant would need (plan, verification TXT at your DNS, zone hold…). Fix it regardless: delete the record.
+* **UNKNOWN** *(v1.1.0)* — the CNAME target resolves to nothing and no rule covers it. Treat as a lead, not as safe.
 * **RETRY** — temporary timeout
 * **ENV_ERROR** — local/system issue
+
+What `OK` does **not** mean: before v1.1.0 a dangling `*.cdn.cloudflare.net` target produced `OK / UNKNOWN / none` because no HTTP answer ever reached a fingerprint. That shape is now `BROKEN`.
+
+### Extra columns (v1.1.0)
+
+`target_rcode` (NOERROR / NOANSWER / NXDOMAIN / SERVFAIL / TIMEOUT / ERROR for the final target) · `edge_provider` · `claimable_by_free_account` (`true` / `false` / `conditional`) · `via_wildcard` · `verification_txt` (stale owner verification records found) · `ct_last_cert` · `cf_zone_present` · `cf_apex_hold_subdomains`.
 
 ### Confidence Levels
 
@@ -249,6 +272,13 @@ python3 exhaunt.py --file subs.txt --mode loose --rdap-mode fast --http-probe --
 ```bash
 python3 exhaunt.py --subs target.example.com --mode strict --http-probe --no-sni --rdap-mode polite
 ```
+
+### Dangling CDN zone, with public and owner-side evidence (v1.1.0)
+
+```bash
+CLOUDFLARE_API_TOKEN=... python3 exhaunt.py --subs app.example.com --mode strict --http-probe --ct --color
+```
+Prints `[BROKEN] app.example.com :: dangling edge CNAME: app.example.com.cdn.cloudflare.net has no address (NOANSWER); claim needs: … | TAKEOVER = cloudflare-partial-dangling-edge | CONF = LOW | EDGE: rcode=NOANSWER claimable_by_free_account=False wildcard=*.example.com stale_verification_txt=cloudflare-verify.app.example.com ct_last_cert=2026-07-24 cf_zone_present=none apex_hold_subdomains=False`
 
 ### CI mode
 

@@ -1,0 +1,163 @@
+# ======================================================================
+# ExHaunt edge-provider table (v1.1.0)
+# ======================================================================
+# A CNAME chain that ends on one of these suffixes but resolves to NO
+# address never reaches an HTTP fingerprint (nothing answers), so before
+# v1.1.0 such hosts were printed `OK`. This table lets ExHaunt classify
+# them as BROKEN ("dangling edge") and say what a claimant would need.
+#
+# Schema per entry:
+#   provider                    — display name
+#   slug                        — short id used in takeover_type (<slug>-dangling-edge)
+#   suffixes                    — terminal CNAME suffixes (lower-case, leading dot)
+#   dangling_rcode              — rcodes that mean "edge name gone" for this provider
+#                                 (NXDOMAIN = name removed; NOANSWER = name exists, no A/AAAA)
+#   claimable_by_free_account   — true | false | conditional (see claim_requirements)
+#   claim_requirements          — what an outsider needs to activate the name; keep factual
+#   verification_txt            — TXT record names a legitimate owner would have published
+#                                 ({host} = the subdomain, {apex} = registrable domain,
+#                                  {zone} = terminal CNAME minus the edge suffix, e.g. qad.priceline.com)
+#   probe_edge_names            — edge names resolved at run time and probed first with SNI/Host
+#                                 ({apex} = registrable domain), e.g. a live sibling on the same CDN
+#   probe_edges                 — static provider anycast IPs, probed as the fallback when the
+#                                 CNAME target has no address (fingerprints need an answer)
+#   docs                        — source for the claim requirements
+# ======================================================================
+
+- provider: Cloudflare (CNAME setup / partial zone)
+  slug: cloudflare-partial
+  suffixes: [".cdn.cloudflare.net"]
+  dangling_rcode: ["NOANSWER", "NXDOMAIN"]
+  claimable_by_free_account: false
+  claim_requirements:
+    - "CNAME setup (partial zone) is only available on a Business or Enterprise plan (Free/Pro: no)"
+    - "the zone stays Pending until a cloudflare-verify.<zone> TXT record is present at the authoritative DNS of the domain"
+    - "if the same zone is added to several accounts, the last account to complete the setup gains ownership"
+    - "an apex zone hold with 'Also prevent subdomains' blocks other accounts from activating subdomain zones"
+  verification_txt: ["cloudflare-verify.{zone}", "cloudflare-verify.{host}"]
+  probe_edge_names: ["www.{apex}.cdn.cloudflare.net", "{apex}.cdn.cloudflare.net"]
+  probe_edges: ["104.16.132.229", "104.16.133.229"]
+  docs:
+    - https://developers.cloudflare.com/dns/zone-setups/partial-setup/
+    - https://developers.cloudflare.com/dns/zone-setups/reference/domain-status/
+    - https://developers.cloudflare.com/fundamentals/account/account-security/zone-holds/
+
+- provider: AWS CloudFront
+  slug: cloudfront
+  suffixes: [".cloudfront.net"]
+  dangling_rcode: ["NXDOMAIN"]
+  claimable_by_free_account: conditional
+  claim_requirements:
+    - "any AWS account can create a distribution, but adding the hostname as an alternate domain name requires a TLS certificate that covers it (AWS enforces this since 2019)"
+    - "the attacker therefore needs to obtain a certificate for the dangling name (DNS or HTTP validation on a name they do not yet control)"
+  verification_txt: ["_acme-challenge.{host}"]
+  probe_edges: []
+  docs:
+    - https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/CNAMEs.html
+
+- provider: Azure Front Door
+  slug: azure-frontdoor
+  suffixes: [".azurefd.net", ".z01.azurefd.net"]
+  dangling_rcode: ["NXDOMAIN"]
+  claimable_by_free_account: conditional
+  claim_requirements:
+    - "any Azure subscription can create a Front Door profile; adding the custom domain requires domain-ownership validation via a _dnsauth.<host> TXT record"
+  verification_txt: ["_dnsauth.{host}"]
+  probe_edges: []
+  docs:
+    - https://learn.microsoft.com/azure/frontdoor/standard-premium/how-to-add-custom-domain
+
+- provider: Azure Traffic Manager
+  slug: azure-trafficmanager
+  suffixes: [".trafficmanager.net"]
+  dangling_rcode: ["NXDOMAIN"]
+  claimable_by_free_account: true
+  claim_requirements:
+    - "a Traffic Manager profile with the released DNS name can be created by any Azure subscription unless the owner reserved it"
+  verification_txt: []
+  probe_edges: []
+  docs:
+    - https://learn.microsoft.com/azure/security/fundamentals/subdomain-takeover
+
+- provider: Azure App Service
+  slug: azure-appservice
+  suffixes: [".azurewebsites.net"]
+  dangling_rcode: ["NXDOMAIN"]
+  claimable_by_free_account: conditional
+  claim_requirements:
+    - "re-creating the app name is possible from any subscription; binding the custom hostname requires an asuid.<host> TXT verification record"
+  verification_txt: ["asuid.{host}"]
+  probe_edges: []
+  docs:
+    - https://learn.microsoft.com/azure/app-service/app-service-web-tutorial-custom-domain
+
+- provider: Akamai edge
+  slug: akamai
+  suffixes: [".edgekey.net", ".edgesuite.net", ".akamaized.net", ".akamaiedge.net"]
+  dangling_rcode: ["NXDOMAIN"]
+  claimable_by_free_account: false
+  claim_requirements:
+    - "edge hostnames are created inside an Akamai contract; no self-service free tier claims an arbitrary edge hostname"
+  verification_txt: []
+  probe_edges: []
+  docs: []
+
+- provider: Fastly
+  slug: fastly
+  suffixes: [".fastly.net", ".fastlylb.net", ".global.ssl.fastly.net"]
+  dangling_rcode: ["NXDOMAIN", "NOANSWER"]
+  claimable_by_free_account: conditional
+  claim_requirements:
+    - "a free Fastly account can add a domain to a service; Fastly requires domain ownership verification for TLS and rejects domains already claimed by another customer"
+  verification_txt: ["_acme-challenge.{host}"]
+  probe_edges: []
+  docs:
+    - https://docs.fastly.com/en/guides/working-with-domains
+
+- provider: GitHub Pages
+  slug: github-pages
+  suffixes: [".github.io"]
+  dangling_rcode: ["NXDOMAIN"]
+  claimable_by_free_account: conditional
+  claim_requirements:
+    - "a free GitHub account can create the pages site; custom-domain verification (_github-pages-challenge-<user> TXT) protects verified domains, unverified ones are claimable"
+  verification_txt: []
+  probe_edges: []
+  docs:
+    - https://docs.github.com/pages/configuring-a-custom-domain-for-your-github-pages-site/verifying-your-custom-domain-for-github-pages
+
+- provider: Heroku
+  slug: heroku
+  suffixes: [".herokudns.com", ".herokuapp.com", ".herokussl.com"]
+  dangling_rcode: ["NXDOMAIN"]
+  claimable_by_free_account: conditional
+  claim_requirements:
+    - "a Heroku account (paid dynos since 2022) can add the custom domain to a new app unless another app already holds it"
+  verification_txt: []
+  probe_edges: []
+  docs:
+    - https://devcenter.heroku.com/articles/custom-domains
+
+- provider: Netlify
+  slug: netlify
+  suffixes: [".netlify.app", ".netlify.com"]
+  dangling_rcode: ["NXDOMAIN"]
+  claimable_by_free_account: conditional
+  claim_requirements:
+    - "a free Netlify account can add a custom domain; Netlify asks for DNS verification when the domain is owned by another account"
+  verification_txt: []
+  probe_edges: []
+  docs:
+    - https://docs.netlify.com/domains-https/custom-domains/
+
+- provider: Vercel
+  slug: vercel
+  suffixes: [".vercel.app", ".vercel-dns.com"]
+  dangling_rcode: ["NXDOMAIN"]
+  claimable_by_free_account: conditional
+  claim_requirements:
+    - "a free Vercel account can add the domain; Vercel requires a _vercel TXT verification when the domain is used by another account"
+  verification_txt: ["_vercel.{apex}"]
+  probe_edges: []
+  docs:
+    - https://vercel.com/docs/projects/domains/add-a-domain

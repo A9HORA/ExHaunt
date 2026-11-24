@@ -60,9 +60,11 @@ USER appuser
 # Ship runtime copies of YAMLs (data, not code) for guaranteed availability
 COPY --from=builder /src/providers.yaml    /providers.yaml
 COPY --from=builder /src/fingerprints.yaml /fingerprints.yaml
+COPY --from=builder /src/edges.yaml        /edges.yaml
 
-# Default providers file path to eliminate warnings
+# Default providers / edges file paths to eliminate warnings
 ENV EXHAUNT_PROVIDERS_FILE=/providers.yaml
+ENV EXHAUNT_EDGES_FILE=/edges.yaml
 
 # Copy ONLY the native binary produced by Nuitka (no .py in final image)
 COPY --from=builder /src/exhaunt /usr/local/bin/exhaunt

@@ -48,6 +48,7 @@ class Risk(Enum):
     VULNERABLE = "VULNERABLE"
     RETRY = "RETRY"
     ENV_ERROR = "ENV_ERROR"
+    UNKNOWN = "UNKNOWN"   # v1.1.0: no rule covers this shape (never printed as OK)
 
 def classify(risk: Risk, reason: str, evidence: Optional[dict] = None, confidence: str = "LOW") -> dict:
     return {"risk": risk.value, "reason": reason, "confidence": confidence, "evidence": evidence or {}}
@@ -581,7 +582,13 @@ class OwnershipMiddleware:
                  http_max_ips: int = 2, no_sni: bool = False, fp_file: Optional[str] = None,
                  providers_file: Optional[str] = None, add_cloud_markers: Optional[List[str]] = None,
                  extra_cloud_asns: Optional[List[int]] = None, unknown_cloud_log: Optional[str] = None,
-                 whois_max_ips: int = 1):
+                 whois_max_ips: int = 1, edges_file: Optional[str] = None, want_ct: bool = False,
+                 cf_token: Optional[str] = None):
+        # v1.1.0: dangling-edge table + optional CT / Cloudflare owner-side checks (edge_middleware.py)
+        from edge_middleware import load_edges  # local import: edge_middleware imports helpers from this module
+        self._edges = load_edges(edges_file)
+        self.want_ct = bool(want_ct)
+        self.cf_token = cf_token or None
         self.whois_delay = whois_delay
         self.mode = mode
         self.rdap_mode = rdap_mode
@@ -683,8 +690,10 @@ class OwnershipMiddleware:
         chain = _resolve_cname_chain(hostname)
         svc["cname_chain"] = chain
         terminal = chain[-1] if chain else hostname
-        ips = _resolve_ips(terminal)
+        from edge_middleware import resolve_ips_detail  # v1.1.0: keep the rcode, not only the addresses
+        ips, rcode = resolve_ips_detail(terminal)
         svc["ips"] = ips
+        svc["target_rcode"] = rcode   # NOERROR | NOANSWER | NXDOMAIN | SERVFAIL | TIMEOUT | ERROR
         svc["loose_match_provider"] = any(terminal.lower().endswith(suf) for suf in PROVIDER_SUFFIXES)
         if ips and IPWhois is not None:
             info_primary = None
@@ -790,10 +799,49 @@ class OwnershipMiddleware:
                 reason = f"CNAME points to unbound service (fingerprint: {'; '.join(fp_names)})"
         hostname_ips = _resolve_ips(hostname)
         takeover_confidence = _grade_takeover_confidence(takeover_type=takeover_type, http_probe=http_probe, tcp_states=tcp_states, mode=self.mode)
-        return {
+        # v1.1.0 — dangling edge / no-rule handling. Before this, a CNAME to a CDN edge name with no address and no
+        # HTTP answer fell through every rule and was printed OK (ten *.qad.priceline.com → cdn.cloudflare.net, 2026-11-24).
+        edge_block = None
+        chain = service_provider.get("cname_chain") or []
+        if takeover_type == "UNKNOWN" and chain and not service_provider.get("ips") and risk == Risk.OK.value:
+            from edge_middleware import dangling_edge_assessment, grade_edge_confidence
+            edge_block = dangling_edge_assessment(
+                hostname=hostname, chain=chain, ips=service_provider.get("ips") or [],
+                rcode=service_provider.get("target_rcode") or "NOANSWER", edges=self._edges, fps=self._fps,
+                mode=self.mode, http_timeout=self.http_timeout, want_ct=self.want_ct, cf_token=self.cf_token)
+            terminal = chain[-1]
+            if edge_block and edge_block.get("dangling"):
+                slug = edge_block.get("slug") or "edge"
+                takeover_type = f"{slug}-dangling-edge"
+                takeover_confidence = grade_edge_confidence(edge_block, self.mode)
+                claim = str(edge_block.get("claimable_by_free_account")).lower()
+                if self.mode == "loose" and claim == "true":
+                    risk = Risk.VULNERABLE.value
+                    reason = f"dangling edge CNAME: {terminal} has no address ({edge_block['target_rcode']}); provider allows self-service claim"
+                    loose_vuln = True
+                else:
+                    risk = Risk.BROKEN.value
+                    reqs = edge_block.get("claim_requirements") or []
+                    first = (reqs[0] if reqs else "see provider docs")
+                    more = f" (+{len(reqs) - 1} more in JSON edge.claim_requirements)" if len(reqs) > 1 else ""
+                    reason = f"dangling edge CNAME: {terminal} has no address ({edge_block['target_rcode']}); claim needs: {first}{more}"
+                probe_fps = (edge_block.get("edge_probe") or {}).get("fingerprints") or []
+                if probe_fps:
+                    fp_names = sorted(set(fp_names + probe_fps))
+                    if http_probe is None:
+                        http_probe = {"per_ip": {}, "fingerprints": probe_fps, "confidence": (edge_block.get("edge_probe") or {}).get("confidence", "none"), "any_vulnerable": False, "source": "provider edge (SNI/Host)"}
+            else:
+                risk = Risk.UNKNOWN.value
+                reason = f"CNAME target {terminal} resolves to no address ({service_provider.get('target_rcode')}); no rule for this target"
+            dns_provider["classification"] = classify(Risk(risk), reason, dns_provider.get("classification", {}).get("evidence") or {},
+                                                      confidence=(dns_provider.get("classification", {}).get("confidence") or "MEDIUM"))
+        out = {
             "hostname": hostname, "base_domain": base_domain, "hostname_ips": hostname_ips,
             "dns_provider": dns_provider, "domain_owner": domain_owner, "service_provider": service_provider,
             "http_probe": http_probe, "tcp_states": tcp_states, "takeover_type": takeover_type,
             "takeover_confidence": takeover_confidence, "http_fingerprints": fp_names,
             "loose_vulnerable": loose_vuln, "mode": self.mode, "rdap_mode": self.rdap_mode,
         }
+        if edge_block:
+            out["edge"] = edge_block
+        return out

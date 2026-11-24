@@ -170,6 +170,35 @@
   confidence: medium
   vulnerable: false
 
+# v1.1.0 — the plain-text form Cloudflare returns to non-browser clients ("error code: 1016"), seen when the
+# provider edge is asked for a hostname by SNI/Host (edge probe). Identification only: a control probe with a
+# made-up name under an apex that has a Cloudflare partial zone also returns 1016, so 1016 proves "this apex is on
+# Cloudflare", not "this hostname is configured". Names two labels below the apex usually fail the TLS handshake
+# (the zone certificate covers *.apex only) and yield no status at all.
+- name: cloudflare-1016-plain
+  provider: Cloudflare
+  status: [ "530", "502" ]
+  body:
+    - "error code:\\s*1016"
+  confidence: medium
+  vulnerable: false
+
+- name: cloudflare-1001-plain
+  provider: Cloudflare
+  status: [ "530" ]
+  body:
+    - "error code:\\s*1001"
+  confidence: medium
+  vulnerable: false
+
+- name: cloudflare-1003-direct-ip
+  provider: Cloudflare
+  status: [ "403" ]
+  body:
+    - "error code:\\s*1003|Direct IP access not allowed"
+  confidence: weak
+  vulnerable: false
+
 
 # ======================================================================
 # Heroku
